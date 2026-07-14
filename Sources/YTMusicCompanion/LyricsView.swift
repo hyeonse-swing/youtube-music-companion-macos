@@ -8,18 +8,6 @@ struct LyricsView: View {
     // Tweak these to restyle. design: .default (SF Pro) reads cleaner than .rounded;
     // try .serif (New York) for a classier look or .monospaced for something techy.
     private let fontDesign: Font.Design = .default
-    private let currentSize: CGFloat = 30
-    private let neighborSize: CGFloat = 19
-
-    // Fills the window height (see main.swift). The current line sits low — one row
-    // up from the bottom — so the already-sung line shows above and the UPCOMING
-    // line shows below it, with that lower line still clearing the Dock.
-    private let windowHeight: CGFloat = 180
-    private let rowHeight: CGFloat = 54
-    // Centre of the current line, measured up from the bottom edge. MUST match
-    // AppDelegate.currentLineFromBottom (the scroll band is placed there). One row
-    // (54) + half a row leaves the upcoming line fully visible underneath.
-    private let currentLineFromBottom: CGFloat = 78
 
     var body: some View {
         content
@@ -59,15 +47,15 @@ struct LyricsView: View {
             // bottom; animating this translates the whole stack upward (real motion,
             // not a cross-fade). A fixed-size Color.clear sizes the box; the stack is
             // pinned to its TOP and shifted by `offset`, overflowing + clipped.
-            let offset = (windowHeight - currentLineFromBottom)
-                - (CGFloat(cur) * rowHeight + rowHeight / 2)
+            let offset = (OverlayStyle.windowHeight - OverlayStyle.currentLineFromBottom)
+                - (CGFloat(cur) * OverlayStyle.rowHeight + OverlayStyle.rowHeight / 2)
 
             Color.clear
-                .frame(height: windowHeight)
+                .frame(height: OverlayStyle.windowHeight)
                 .overlay(alignment: .top) {
                     VStack(spacing: 0) {
                         ForEach(Array(model.lines.enumerated()), id: \.offset) { idx, line in
-                            lineView(idx: idx, line: line).frame(height: rowHeight)
+                            lineView(idx: idx, line: line).frame(height: OverlayStyle.rowHeight)
                         }
                     }
                     .frame(maxWidth: .infinity, alignment: .top)
@@ -90,15 +78,15 @@ struct LyricsView: View {
         // Size difference via scaleEffect (a smooth transform), NOT font size —
         // changing the font size re-lays-out and re-rasterises the text, which
         // pops instead of animating (very visible with CJK / Korean glyphs).
-        let scale = isCurrent ? 1.0 : neighborSize / currentSize
+        let scale = isCurrent ? 1.0 : OverlayStyle.neighborFontSize / OverlayStyle.currentFontSize
 
         return Text(line.text.isEmpty ? "♪" : line.text)
-            .font(.system(size: currentSize, weight: .bold, design: fontDesign))
+            .font(.system(size: OverlayStyle.currentFontSize, weight: .bold, design: fontDesign))
             .foregroundStyle(.white)
             .lineLimit(1)                       // never wrap…
             .minimumScaleFactor(0.45)           // …shrink long lines to fit one line
             .frame(maxWidth: .infinity)
-            .padding(.horizontal, 34)
+            .padding(.horizontal, OverlayStyle.horizontalPadding)
             .opacity(opacity)
             .blur(radius: blur)
             .scaleEffect(scale, anchor: .center)

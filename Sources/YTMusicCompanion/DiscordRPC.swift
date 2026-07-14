@@ -2,6 +2,25 @@ import Foundation
 
 // IPC framing approach adapted from SwordRPC by Alejandro Alonso (MIT).
 
+struct PresenceActivity: Equatable {
+    var name: String
+    var details: String
+    var state: String
+    var start: Date?
+    var end: Date?
+    var largeImage: String?
+    var largeImageText: String?
+    var smallImage: String?
+    var smallImageText: String?
+}
+
+protocol PresencePublishing: AnyObject {
+    var isConfigured: Bool { get }
+    func setActivity(_ activity: PresenceActivity, completion: ((Bool) -> Void)?)
+    func clear()
+    func disconnect()
+}
+
 /// A dependency-free Discord Rich Presence client over Discord's local IPC.
 ///
 /// Discord exposes a Unix domain socket at `$TMPDIR/discord-ipc-N` (N = 0..9) when
@@ -16,14 +35,10 @@ import Foundation
 /// from the main thread (PlayerModel) without blocking it. It degrades gracefully:
 /// if Discord isn't running there's simply no socket to connect to and every call
 /// is a quiet no-op until the next attempt.
-final class DiscordRPC {
-    /// The public "LocalMusic" Discord application ID. A client ID is NOT a secret
-    /// (it's shipped in every Discord-integrated app and visible to anyone), so it's
-    /// fine to hardcode. Whatever this application is *named* in Discord's Developer
-    /// Portal is the text that renders after "Listening to" — here, "LocalMusic".
-    private static let clientID = "834057528828100668"
+final class DiscordRPC: PresencePublishing {
+    private let clientID: String?
 
-    /// Activity type 2 = Listening, so the status reads "Listening to LocalMusic".
+    /// Activity type 2 makes Discord render this as a listening activity.
     /// (0 = Playing, 1 = Streaming, 2 = Listening, 3 = Watching.)
     private static let listeningType = 2
 
@@ -35,31 +50,16 @@ final class DiscordRPC {
         case pong = 4
     }
 
-    /// A presence snapshot. Timestamps are Unix epoch SECONDS (see encoding note in
-    /// `setActivity`). Discord renders a live progress bar from start/end on its own,
-    /// so we don't need per-second updates.
-    struct Activity {
-        var name: String      // shown after "Listening to" — we use "<title> - <artist>"
-        var details: String   // first line — we use the track title
-        var state: String     // second line — we use the artist
-        var start: Date?
-        var end: Date?
-        // Large image. Discord's `large_image` can't take local artwork bytes — it
-        // accepts an external https URL OR a pre-uploaded asset KEY. We pass either: a
-        // resolved cover URL (iTunes/YouTube, see Artwork.swift), or — when no cover
-        // resolved — the source's static asset key as a fallback. nil → no large image.
-        var largeImage: String?
-        var largeImageText: String?   // hover text — album (or title, or source label)
-        // Small badge overlay (a per-source icon). Always an uploaded asset KEY
-        // (`spotify`/`telegram`/`youtube-music`), never a URL. nil → no badge.
-        var smallImage: String?
-        var smallImageText: String?   // hover text — the source label
-    }
-
     // All socket access is confined to this serial queue. fd is only touched here.
     private let queue = DispatchQueue(label: "DiscordRPC.ipc")
     private var fd: Int32 = -1
     private var isConnected = false
+
+    var isConfigured: Bool { clientID != nil }
+
+    init(clientID: String?) {
+        self.clientID = clientID
+    }
 
     // MARK: - Public API
 
@@ -76,7 +76,7 @@ final class DiscordRPC {
 
     /// Send a SET_ACTIVITY frame, auto-connecting first if needed. A no-op (without
     /// error) when Discord isn't reachable.
-    func setActivity(_ activity: Activity, completion: ((Bool) -> Void)? = nil) {
+    func setActivity(_ activity: PresenceActivity, completion: ((Bool) -> Void)? = nil) {
         queue.async {
             if !self.isConnected { _ = self.connectLocked() }
             guard self.isConnected else { completion?(false); return }
@@ -163,6 +163,7 @@ final class DiscordRPC {
 
     /// Returns (socketFound, ready). Leaves `isConnected`/`fd` set on success.
     private func connectLocked() -> (Bool, Bool) {
+        guard let clientID else { return (false, false) }
         guard let path = Self.socketPaths().first(where: { FileManager.default.fileExists(atPath: $0) }) else {
             return (false, false)   // Discord not running
         }
@@ -214,7 +215,7 @@ final class DiscordRPC {
 
         // Handshake: opcode 0 with {"v":1,"client_id":...}. Discord answers with a
         // FRAME whose evt == "READY".
-        guard let body = try? JSONEncoder().encode(Handshake(v: 1, clientID: Self.clientID)),
+        guard let body = try? JSONEncoder().encode(Handshake(v: 1, clientID: clientID)),
               writeFrame(.handshake, body) else {
             disconnectLocked()
             return (true, false)
@@ -267,7 +268,7 @@ final class DiscordRPC {
 
     /// Build + send a SET_ACTIVITY frame. Pass nil to clear. On any write/read error
     /// we mark disconnected so the next update retries the whole connection.
-    private func sendActivityLocked(_ activity: Activity?) -> Bool {
+    private func sendActivityLocked(_ activity: PresenceActivity?) -> Bool {
         let payload: ActivityPayload?
         if let a = activity {
             // TIMESTAMP UNIT: Discord's LOCAL IPC SET_ACTIVITY takes Unix epoch

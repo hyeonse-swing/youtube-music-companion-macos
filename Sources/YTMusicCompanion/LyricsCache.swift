@@ -7,7 +7,7 @@ import CryptoKit
 /// load instantly — and offline — on every later play, across app restarts.
 ///
 /// One JSON file per track under Caches, named by a SHA-256 of the `trackKey`
-/// (which is free-form `"artist|title"` and can't be a filename directly). This
+/// (which is free-form `"artist|title|album"` and can't be a filename directly). This
 /// is a generic key→`[LyricLine]` store; the *policy* of what's worth persisting
 /// lives in the caller (`PlayerModel`), which writes only tracks it actually
 /// found lyrics for — real lyrics never go stale, whereas an empty result can
@@ -26,7 +26,10 @@ enum LyricsCache {
     private static let defaultDirectory: URL? = {
         guard let base = FileManager.default
             .urls(for: .cachesDirectory, in: .userDomainMask).first else { return nil }
-        let dir = base.appendingPathComponent("MacNowPlaying/lyrics", isDirectory: true)
+        let dir = base.appendingPathComponent(
+            "\(AppConfiguration.cacheDirectoryName)/lyrics",
+            isDirectory: true
+        )
         try? FileManager.default.createDirectory(at: dir, withIntermediateDirectories: true)
         return dir
     }()

@@ -14,29 +14,13 @@ final class ScrollHostingView<V: View>: NSHostingView<V> {
 @MainActor
 final class AppDelegate: NSObject, NSApplicationDelegate {
     private var window: NSWindow!
-    private let model = PlayerModel()
+    private let discord = DiscordRPC(clientID: AppConfiguration.discordClientID)
+    private lazy var model = PlayerModel(
+        presenceController: DiscordPresenceController(publisher: discord)
+    )
     private var hoverTimer: Timer?
     private var activity: NSObjectProtocol?
     private var menuBar: MenuBar?
-    // Retained for the app's lifetime; PlayerModel drives presence through it.
-    private let discord = DiscordRPC()
-
-    // Height of the interactive band over the current line — one lyric row
-    // (matches LyricsView.rowHeight). Only here is the window non-click-through.
-    private static let centerBandHeight: CGFloat = 54
-
-    // Distance from the window's bottom edge up to the centre of the current line.
-    // MUST match LyricsView.currentLineFromBottom so the scroll band lands on it.
-    private static let currentLineFromBottom: CGFloat = 78
-
-    // The interactive region is only as WIDE as the current line's rendered text
-    // (centred) — so the empty margins on either side stay click-through and the
-    // overlay only catches the mouse where glyphs actually are. Font size/weight and
-    // horizontal padding MUST match LyricsView (currentSize / .bold / padding 34).
-    private static let currentLineFont = NSFont.systemFont(ofSize: 30, weight: .bold)
-    private static let textHPadding: CGFloat = 34
-    // A little slack around the glyphs so the text stays comfortable to hover/scroll.
-    private static let hitMargin: CGFloat = 16
 
     func applicationDidFinishLaunching(_ notification: Notification) {
         // Prevent App Nap from throttling our polling + network while unfocused,
@@ -48,8 +32,8 @@ final class AppDelegate: NSObject, NSApplicationDelegate {
             reason: "Live lyrics overlay"
         )
 
-        let width: CGFloat = 1000
-        let height: CGFloat = 180
+        let width = OverlayStyle.windowWidth
+        let height = OverlayStyle.windowHeight
 
         // Always the primary (menu-bar) display — screens[0] — not NSScreen.main,
         // which would be wherever focus happened to be at launch. Use visibleFrame
@@ -127,10 +111,6 @@ final class AppDelegate: NSObject, NSApplicationDelegate {
             }
         }
 
-        // Inject the Discord client so PlayerModel can publish Rich Presence (a
-        // parallel consumer of the now-playing engine, independent of the overlay).
-        model.discord = discord
-
         // Retain the menubar status item — without a strong reference it vanishes.
         menuBar = MenuBar(model: model)
 
@@ -138,9 +118,7 @@ final class AppDelegate: NSObject, NSApplicationDelegate {
     }
 
     func applicationWillTerminate(_ notification: Notification) {
-        // Don't leave a stale "Listening to LocalMusic" presence behind on quit.
-        discord.clear()
-        discord.disconnect()
+        model.stop()
     }
 
     /// Screen-space rect of the current lyric line's visible text: a centred band
@@ -156,22 +134,22 @@ final class AppDelegate: NSObject, NSApplicationDelegate {
         let idx = max(0, min(model.currentIndex, lines.count - 1))
         let text = lines[idx].text.isEmpty ? "♪" : lines[idx].text
 
-        let maxContentWidth = frame.width - 2 * Self.textHPadding
-        let measured = (text as NSString).size(withAttributes: [.font: Self.currentLineFont]).width
+        let maxContentWidth = frame.width - 2 * OverlayStyle.horizontalPadding
+        let measured = (text as NSString).size(withAttributes: [.font: OverlayStyle.currentLineFont]).width
         // minimumScaleFactor shrinks an over-long line to fit the text area, so the
         // rendered width never exceeds maxContentWidth.
-        let width = min(measured, maxContentWidth) + 2 * Self.hitMargin
+        let width = min(measured, maxContentWidth) + 2 * OverlayStyle.hitMargin
 
         return NSRect(
             x: frame.midX - width / 2,
-            y: frame.minY + Self.currentLineFromBottom - Self.centerBandHeight / 2,
+            y: frame.minY + OverlayStyle.currentLineFromBottom - OverlayStyle.rowHeight / 2,
             width: width,
-            height: Self.centerBandHeight
+            height: OverlayStyle.rowHeight
         )
     }
 }
 
-// Debug: `MacNowPlaying --now` → print the current MediaRemote read once, exit.
+// Debug: `YTMusicCompanion --now` → print the current MediaRemote read once, exit.
 if CommandLine.arguments.contains("--now") {
     if let np = MediaRemoteBridge.query() {
         print("NOW → \(np.artist) — \(np.title)  [playing=\(np.isPlaying) rate=\(np.rate) " +
@@ -182,11 +160,11 @@ if CommandLine.arguments.contains("--now") {
     exit(0)
 }
 
-// Debug: `MacNowPlaying --probe "Artist" "Title" duration` → fetch + print, exit.
+// Debug: `YTMusicCompanion --probe "Artist" "Title" duration` → fetch + print, exit.
 if CommandLine.arguments.first(where: { $0 == "--probe" }) != nil {
     let a = CommandLine.arguments
     guard a.count >= 5 else {
-        FileHandle.standardError.write("usage: MacNowPlaying --probe \"Artist\" \"Title\" <duration>\n".data(using: .utf8)!)
+        FileHandle.standardError.write("usage: YTMusicCompanion --probe \"Artist\" \"Title\" <duration>\n".data(using: .utf8)!)
         exit(2)
     }
     let np = NowPlaying(title: a[3], artist: a[2], album: "",
@@ -205,13 +183,13 @@ if CommandLine.arguments.first(where: { $0 == "--probe" }) != nil {
     exit(0)
 }
 
-// Debug: `MacNowPlaying --art "Artist" "Title"` → print the whole resolver chain
+// Debug: `YTMusicCompanion --art "Artist" "Title"` → print the whole resolver chain
 // (iTunes hit, YouTube-thumbnail hit, and the resolved final URL), exit. Lets you
 // verify the iTunes → YouTube fallback order end-to-end.
 if CommandLine.arguments.contains("--art") {
     let a = CommandLine.arguments
     guard a.count >= 4, let i = a.firstIndex(of: "--art"), i + 2 < a.count else {
-        FileHandle.standardError.write("usage: MacNowPlaying --art \"Artist\" \"Title\"\n".data(using: .utf8)!)
+        FileHandle.standardError.write("usage: YTMusicCompanion --art \"Artist\" \"Title\"\n".data(using: .utf8)!)
         exit(2)
     }
     let artist = a[i + 1], title = a[i + 2]
@@ -226,10 +204,14 @@ if CommandLine.arguments.contains("--art") {
     }
 }
 
-// Debug: `MacNowPlaying --discord` → connect, send a test activity, hold ~3s so you
+// Debug: `YTMusicCompanion --discord` → connect, send a test activity, hold ~3s so you
 // can eyeball Discord, then clear + exit. End-to-end IPC check.
 if CommandLine.arguments.contains("--discord") {
-    let rpc = DiscordRPC()
+    guard let clientID = AppConfiguration.discordClientID else {
+        print("Discord client ID is not configured")
+        exit(2)
+    }
+    let rpc = DiscordRPC(clientID: clientID)
     let group = DispatchGroup()
     group.enter()
     rpc.connect { found, ready in
@@ -247,10 +229,10 @@ if CommandLine.arguments.contains("--discord") {
             state: "Test Artist",
             start: now,
             end: now.addingTimeInterval(180),
-            largeImage: "spotify",          // asset key fallback (renders once uploaded)
+            largeImage: YouTubeMusicSource.discordAssetKey,
             largeImageText: "Test Album",
-            smallImage: "spotify",          // source badge (renders once uploaded)
-            smallImageText: "Spotify"
+            smallImage: YouTubeMusicSource.discordAssetKey,
+            smallImageText: YouTubeMusicSource.displayName
         )) { sent in
             print("activity sent: \(sent)")
             group.leave()

@@ -14,10 +14,10 @@ struct NowPlaying: Equatable {
     var sourcePID: Int32      // process id of the now-playing client; 0 if unknown. Used to
                               // disambiguate the older `app_mode_loader` Chromium PWA via `ps`.
 
-    /// Stable identity for "is this a different track than before?"
-    /// Deliberately excludes duration — web players (YT Music) report it late or
-    /// fluctuating, which would otherwise churn the key and re-fetch endlessly.
-    var trackKey: String { "\(artist)|\(title)" }
+    /// Stable identity for "is this a different recording than before?"
+    /// Album distinguishes common alternate releases while duration stays excluded:
+    /// web players report duration late or fluctuate, which would churn the key.
+    var trackKey: String { "\(artist)|\(title)|\(album)" }
 
     var isValid: Bool { !title.isEmpty && !artist.isEmpty }
 }
@@ -64,9 +64,9 @@ enum MediaRemoteBridge {
           }
         }
 
-        // The source app behind the now-playing item (e.g. Apple Music, Spotify, or
-        // a browser/PWA for web players). Used to tell real audio apps from a random
-        // YouTube video or stream. parentApplicationBundleIdentifier is the real host
+        // The source app behind the now-playing item. Used to distinguish the installed
+        // YouTube Music app from an ordinary browser tab or another media player.
+        // parentApplicationBundleIdentifier is the real host
         // for PWAs/helpers; fall back to bundleIdentifier.
         const pp = Req.localNowPlayingPlayerPath;
         if (pp && pp.client) {

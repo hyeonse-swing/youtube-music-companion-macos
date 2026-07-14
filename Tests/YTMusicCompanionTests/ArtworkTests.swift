@@ -1,5 +1,5 @@
 import XCTest
-@testable import MacNowPlaying
+@testable import YTMusicCompanion
 
 /// Pure-helper tests for the iTunes cover resolver. The network call (`coverURL`) is
 /// not exercised here — only the deterministic matching/normalization logic.

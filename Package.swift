@@ -2,18 +2,18 @@
 import PackageDescription
 
 let package = Package(
-    name: "MacNowPlaying",
+    name: "YTMusicCompanion",
     platforms: [.macOS(.v14)],
     targets: [
         .executableTarget(
-            name: "MacNowPlaying",
-            path: "Sources/MacNowPlaying",
+            name: "YTMusicCompanion",
+            path: "Sources/YTMusicCompanion",
             resources: [.copy("Resources/tray-icon.png")]
         ),
         .testTarget(
-            name: "MacNowPlayingTests",
-            dependencies: ["MacNowPlaying"],
-            path: "Tests/MacNowPlayingTests"
+            name: "YTMusicCompanionTests",
+            dependencies: ["YTMusicCompanion"],
+            path: "Tests/YTMusicCompanionTests"
         )
     ]
 )

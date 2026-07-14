@@ -1,5 +1,5 @@
 import XCTest
-@testable import MacNowPlaying
+@testable import YTMusicCompanion
 
 final class LyricsCacheTests: XCTestCase {
 

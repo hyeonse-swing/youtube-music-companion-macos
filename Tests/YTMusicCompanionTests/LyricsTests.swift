@@ -1,5 +1,5 @@
 import XCTest
-@testable import MacNowPlaying
+@testable import YTMusicCompanion
 
 final class LyricsTests: XCTestCase {
 
@@ -101,15 +101,19 @@ final class LyricsTests: XCTestCase {
 
     // MARK: - NowPlaying
 
-    func testTrackKeyExcludesDuration() {
+    func testTrackKeyIncludesAlbumButExcludesDuration() {
         let a = NowPlaying(title: "Song", artist: "Band", album: "X",
                            duration: 180, elapsed: 0, timestamp: 0, isPlaying: true, rate: 1,
                            sourceBundle: "", sourcePID: 0)
         let b = NowPlaying(title: "Song", artist: "Band", album: "X",
                            duration: 999, elapsed: 0, timestamp: 0, isPlaying: true, rate: 1,
                            sourceBundle: "", sourcePID: 0)
+        let alternateAlbum = NowPlaying(title: "Song", artist: "Band", album: "Y",
+                                        duration: 180, elapsed: 0, timestamp: 0, isPlaying: true, rate: 1,
+                                        sourceBundle: "", sourcePID: 0)
         XCTAssertEqual(a.trackKey, b.trackKey)   // duration must not affect identity
-        XCTAssertEqual(a.trackKey, "Band|Song")
+        XCTAssertEqual(a.trackKey, "Band|Song|X")
+        XCTAssertNotEqual(a.trackKey, alternateAlbum.trackKey)
     }
 
     func testIsValidRequiresArtistAndTitle() {

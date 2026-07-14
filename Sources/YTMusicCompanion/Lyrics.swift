@@ -1,5 +1,22 @@
 import Foundation
 
+private final class ConcurrentResult<Value>: @unchecked Sendable {
+    private let lock = NSLock()
+    private var storedValue: Value
+
+    init(_ initialValue: Value) {
+        storedValue = initialValue
+    }
+
+    var value: Value {
+        lock.withLock { storedValue }
+    }
+
+    func store(_ value: Value) {
+        lock.withLock { storedValue = value }
+    }
+}
+
 /// One timestamped lyric line. `Codable` so the disk cache (`LyricsCache`) can
 /// persist resolved lyrics between sessions.
 struct LyricLine: Equatable, Codable {
@@ -11,7 +28,7 @@ struct LyricLine: Equatable, Codable {
 enum LRCLIB {
     // LRCLIB politely asks clients to identify themselves. Shared with Artwork's
     // iTunes lookup so both HTTP clients send one consistent User-Agent.
-    static let userAgent = "mac-now-playing/0.1 (https://github.com/kernoeb/mac-now-playing)"
+    static let userAgent = AppConfiguration.userAgent
 
     /// Prefer a romanised version over the canonical Hangul one when a well-timed
     /// one is available (user preference). Set false to always use the canonical.
@@ -89,21 +106,23 @@ enum LRCLIB {
     /// Returns the lines (nil = no usable match) plus whether either concurrent
     /// request hard-failed transiently (so the caller can retry rather than cache).
     private static func resolve(_ track: NowPlaying, artist norm: String, title: String) -> (lines: [LyricLine]?, failed: Bool) {
-        var canonical: (lines: [LyricLine]?, failed: Bool) = (nil, false)
-        var search: (candidates: [Candidate], failed: Bool) = ([], false)
+        let canonicalResult = ConcurrentResult<(lines: [LyricLine]?, failed: Bool)>((nil, false))
+        let searchResult = ConcurrentResult<(candidates: [Candidate], failed: Bool)>(([], false))
         let group = DispatchGroup()
         group.enter()
         DispatchQueue.global().async {
-            canonical = getExact(track, artist: norm, title: title)
+            canonicalResult.store(getExact(track, artist: norm, title: title))
             group.leave()
         }
         group.enter()
         DispatchQueue.global().async {
-            search = searchCandidates(track, artist: norm, title: title)
+            searchResult.store(searchCandidates(track, artist: norm, title: title))
             group.leave()
         }
         group.wait()
 
+        let canonical = canonicalResult.value
+        let search = searchResult.value
         let candidates = search.candidates
         // A request that 504'd anywhere here means a no-match could be a false
         // negative, so propagate the failure flag whenever we end up empty-handed.

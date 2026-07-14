@@ -1,80 +1,79 @@
-# 🎵 MacNowPlaying
+# YT Music Companion
 
-![macOS](https://img.shields.io/badge/macOS-14+-111111?logo=apple&logoColor=white)
-![Swift](https://img.shields.io/badge/Swift-5.9-F05138?logo=swift&logoColor=white)
-![License: MIT](https://img.shields.io/badge/license-MIT-3DA639)
+A focused macOS menu-bar app for the installed YouTube Music web app. It does two things:
 
-A macOS companion for whatever you're playing. It reads the system's now-playing
-state (track, artist, live position) from MediaRemote and builds two features on it:
+- Shows synchronized lyrics in a transparent, click-through overlay.
+- Publishes the current track, artwork, and progress to Discord Rich Presence.
 
-- 🎤 **Synced-lyrics overlay**: a transparent, click-through karaoke overlay at the
-  bottom of the screen. The current line is bright and sharp, neighbours dim and
-  recede, and lines spring upward in time with the song. Hover to make it opaque.
-- 💬 **Discord Rich Presence**: puts the current track on your Discord profile with
-  album art and a live progress bar, for real music only (Spotify, YouTube Music,
-  Telegram).
+Other players and ordinary browser tabs are intentionally ignored.
 
-Lyrics come from [LRCLIB](https://lrclib.net) (free, no API key). A menubar item
-shows the current track and toggles either feature.
+## Requirements
 
-## Run
+- macOS 14 or later
+- Discord desktop app for Rich Presence
+- YouTube Music installed as a Chromium web app
+- Swift 5.9 or later to build from source
+
+### Install YouTube Music as an app
+
+1. Open <https://music.youtube.com> in Chrome, Brave, or Edge.
+2. Use the install icon in the address bar, or choose **Install YouTube Music** from the browser menu.
+3. Play music from the installed app, not a regular browser tab.
+
+This distinction is required because macOS reports only the generic browser bundle for normal tabs.
+
+## Discord setup
+
+1. Create an application in the [Discord Developer Portal](https://discord.com/developers/applications).
+2. Copy its **Application ID**. This public identifier is the Discord client ID.
+3. Optionally upload a Rich Presence Art Asset with the key `youtube-music` for the source badge and fallback cover.
+4. Build or install with the ID:
 
 ```sh
-swift run        # builds and launches the overlay (no Dock icon)
-swift test       # run the unit tests
+DISCORD_CLIENT_ID=your_application_id ./scripts/install.sh
+open -a YTMusicCompanion
 ```
 
-Play something in YouTube Music / Apple Music / etc. and the lyrics appear.
-Quit from the terminal with Ctrl-C.
+Discord must have activity sharing enabled. If no client ID is supplied, the lyrics overlay still works and the Discord menu item is disabled.
+
+## Development
+
+```sh
+swift build
+swift test
+DISCORD_CLIENT_ID=your_application_id swift run
+```
+
+Useful probes:
+
+```sh
+.build/debug/YTMusicCompanion --now
+.build/debug/YTMusicCompanion --probe "Artist" "Title" 200
+.build/debug/YTMusicCompanion --art "Artist" "Title"
+DISCORD_CLIENT_ID=your_application_id .build/debug/YTMusicCompanion --discord
+```
+
+## Architecture
+
+- `NowPlaying.swift`: reads macOS MediaRemote state through an `osascript` JXA bridge.
+- `YouTubeMusicSource.swift`: accepts only the installed YouTube Music web app.
+- `PlayerModel.swift`: coordinates playback polling, lyrics, timing, and menu state.
+- `DiscordPresenceController.swift`: resolves artwork and manages successful-send deduplication and retry.
+- `DiscordRPC.swift`: dependency-free Discord local IPC client.
+- `Lyrics.swift` / `LyricsCache.swift`: LRCLIB lookup, LRC parsing, and disk cache.
+- `LyricsView.swift` / `OverlayStyle.swift`: overlay rendering and shared geometry.
+
+The MediaRemote bridge uses a private Apple framework. That makes direct, notarized distribution appropriate, but not Mac App Store distribution. macOS updates may also require compatibility fixes.
 
 ## Build a release app
 
 ```sh
-./scripts/build-app.sh   # → MacNowPlaying.app (optimised, ad-hoc signed)
-open MacNowPlaying.app
-
-./scripts/install.sh     # build + copy to /Applications; then launch via Spotlight,
-                         # `open -a MacNowPlaying`, or add as a Login Item to auto-start
+DISCORD_CLIENT_ID=your_application_id ./scripts/build-app.sh
+open YTMusicCompanion.app
 ```
 
-Produces a double-clickable `MacNowPlaying.app` (`LSUIElement`, so no Dock icon).
-It's ad-hoc signed for local use — for distribution to other Macs you'd sign
-with a Developer ID and notarise. Quit it from the menubar status item (the music
-note icon), which also shows the current track and a "Show Overlay" toggle.
-
-## Project layout
-
-| File | Role |
-|---|---|
-| `main.swift` | App bootstrap; transparent borderless floating `NSWindow`, hover polling |
-| `NowPlaying.swift` | **The now-playing engine**: MediaRemote `osascript` bridge → `NowPlaying` snapshot |
-| `Lyrics.swift` | LRCLIB fetch + `[mm:ss.xx]` LRC parser (lyrics feature) |
-| `Artwork.swift` | Cover-art resolver via `curl`: iTunes Search API, then YouTube-thumbnail fallback (Discord feature) |
-| `PlayerModel.swift` | Polls now-playing, fetches lyrics, tracks current line (interpolated) |
-| `LyricsView.swift` | The SwiftUI karaoke view (blur/opacity gradient + spring scroll) |
-| `MenuBar.swift` | Menubar status item: now-playing readout, overlay + Discord toggles, Quit |
-| `DiscordRPC.swift` | **Discord Rich Presence**: dependency-free local-IPC client (Discord feature) |
-
-## Implementation notes
-
-A few non-obvious things (see [CLAUDE.md](CLAUDE.md) for the full reasoning):
-
-- **MediaRemote needs `osascript`**: on macOS 15.4+ it only serves now-playing data
-  to Apple-signed callers, so the app reads it through an `osascript` bridge.
-- **`curl`, not URLSession**: URLSession stalls ~8s under this app's run loop, so the
-  lyrics and artwork lookups shell out to `curl`.
-- **Discord presence** is gated to real music sources (Spotify, YouTube Music,
-  Telegram) and shows album art resolved from iTunes (with a YouTube-thumbnail
-  fallback). The source badge needs assets uploaded to the Discord app's Art Assets.
-
-Debug commands: `--now` (current track), `--probe "Artist" "Title" <dur>` (lyrics
-lookup), `--discord` (test presence), `--art "Artist" "Title"` (cover resolver).
-
-## Next steps
-
-- Reposition/drag, pick alternate LRCLIB version, word-level highlighting, Genius
-  plain-text fallback.
+The generated app is ad-hoc signed for local use. Distribution to other Macs requires a Developer ID signature and notarization.
 
 ## License
 
-[MIT](LICENSE).
+MIT. The original copyright and license notice are retained, with additional copyright for this derivative project.

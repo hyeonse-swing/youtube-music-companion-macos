@@ -1,0 +1,114 @@
+import XCTest
+@testable import YTMusicCompanion
+
+@MainActor
+final class DiscordPresenceControllerTests: XCTestCase {
+    func testFailedPublicationIsRetriedForTheSameTrack() {
+        let publisher = StubPublisher()
+        let controller = DiscordPresenceController(
+            publisher: publisher,
+            artworkResolver: StubArtworkResolver()
+        )
+        let track = makeTrack()
+
+        controller.update(for: track)
+        XCTAssertEqual(publisher.activities.count, 1)
+
+        publisher.completeNext(with: false)
+        drainMainQueue()
+        controller.update(for: track)
+
+        XCTAssertEqual(publisher.activities.count, 2)
+    }
+
+    func testSuccessfulPublicationDeduplicatesTheSameTrack() {
+        let publisher = StubPublisher()
+        let controller = DiscordPresenceController(
+            publisher: publisher,
+            artworkResolver: StubArtworkResolver()
+        )
+        let track = makeTrack()
+
+        controller.update(for: track)
+        publisher.completeNext(with: true)
+        drainMainQueue()
+        controller.update(for: track)
+
+        XCTAssertEqual(publisher.activities.count, 1)
+    }
+
+    func testClearRemovesPublishedPresence() {
+        let publisher = StubPublisher()
+        let controller = DiscordPresenceController(
+            publisher: publisher,
+            artworkResolver: StubArtworkResolver()
+        )
+
+        controller.update(for: makeTrack())
+        publisher.completeNext(with: true)
+        drainMainQueue()
+        controller.clear()
+
+        XCTAssertEqual(publisher.clearCount, 1)
+    }
+
+    func testClearAlsoCancelsAnInFlightPublication() {
+        let publisher = StubPublisher()
+        let controller = DiscordPresenceController(
+            publisher: publisher,
+            artworkResolver: StubArtworkResolver()
+        )
+
+        controller.update(for: makeTrack())
+        controller.clear()
+
+        XCTAssertEqual(publisher.clearCount, 1)
+    }
+
+    private func makeTrack() -> NowPlaying {
+        NowPlaying(
+            title: "Test Song",
+            artist: "Test Artist",
+            album: "Test Album",
+            duration: 180,
+            elapsed: 30,
+            timestamp: 1_000,
+            isPlaying: true,
+            rate: 1,
+            sourceBundle: "com.google.Chrome.app.cinhimbnkkaeohfgghhklpknlkffjgod",
+            sourcePID: 0
+        )
+    }
+
+    private func drainMainQueue() {
+        let drained = expectation(description: "main queue drained")
+        DispatchQueue.main.async { drained.fulfill() }
+        wait(for: [drained], timeout: 1)
+    }
+}
+
+private final class StubPublisher: PresencePublishing {
+    let isConfigured = true
+    private(set) var activities: [PresenceActivity] = []
+    private(set) var clearCount = 0
+    private var completions: [((Bool) -> Void)?] = []
+
+    func setActivity(_ activity: PresenceActivity, completion: ((Bool) -> Void)?) {
+        activities.append(activity)
+        completions.append(completion)
+    }
+
+    func completeNext(with result: Bool) {
+        completions.removeFirst()?(result)
+    }
+
+    func clear() {
+        clearCount += 1
+    }
+
+    func disconnect() {}
+}
+
+private struct StubArtworkResolver: ArtworkResolving {
+    func coverURL(for track: NowPlaying) -> String? { nil }
+}

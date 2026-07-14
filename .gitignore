@@ -2,5 +2,5 @@
 .DS_Store
 *.xcodeproj
 .swiftpm/
-MacNowPlaying.app/
+YTMusicCompanion.app/
 .claude/settings.local.json

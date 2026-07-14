@@ -23,7 +23,7 @@ final class MenuBar: NSObject, NSMenuDelegate {
         self.model = model
         statusItem = NSStatusBar.system.statusItem(withLength: NSStatusItem.variableLength)
 
-        nowPlayingItem = NSMenuItem(title: "Nothing playing", action: nil, keyEquivalent: "")
+        nowPlayingItem = NSMenuItem(title: "No YouTube Music playing", action: nil, keyEquivalent: "")
         nowPlayingItem.isEnabled = false
 
         showOverlayItem = NSMenuItem(
@@ -50,7 +50,7 @@ final class MenuBar: NSObject, NSMenuDelegate {
             image?.isTemplate = true
             image?.size = NSSize(width: 16, height: 16)
             button.image = image
-            button.toolTip = "Now Playing"
+            button.toolTip = AppConfiguration.productName
         }
 
         let menu = NSMenu()
@@ -60,6 +60,10 @@ final class MenuBar: NSObject, NSMenuDelegate {
         showOverlayItem.state = model.overlayEnabled ? .on : .off
 
         discordItem.target = self
+        discordItem.isEnabled = model.isDiscordConfigured
+        if !model.isDiscordConfigured {
+            discordItem.title = "Discord Rich Presence (Not Configured)"
+        }
         discordItem.state = model.discordEnabled ? .on : .off
 
         let quitItem = NSMenuItem(
