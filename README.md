@@ -9,6 +9,9 @@ A focused macOS menu-bar app for the installed YouTube Music web app. It does tw
 
 Other players and ordinary browser tabs are intentionally ignored.
 
+Use **About YT Music Companion…** in the menu-bar menu to check the installed
+version, build number, Discord configuration status, bundle identifier, and project link.
+
 ## Requirements
 
 - macOS 14 or later

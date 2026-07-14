@@ -6,8 +6,8 @@ cd "$(dirname "$0")/.."
 
 APP="YTMusicCompanion"
 BUNDLE="${APP}.app"
-VERSION="0.2.0"
-BUILD_VERSION="2"
+VERSION="0.3.0"
+BUILD_VERSION="3"
 BUNDLE_ID="com.hyeonseswing.YTMusicCompanion"
 DISPLAY_NAME="YT Music Companion"
 DISCORD_CLIENT_ID="${DISCORD_CLIENT_ID:-}"
@@ -51,6 +51,7 @@ cat > "${BUNDLE}/Contents/Info.plist" <<PLIST
     <key>CFBundleIconFile</key>        <string>AppIcon</string>
     <key>CFBundleVersion</key>         <string>${BUILD_VERSION}</string>
     <key>CFBundleShortVersionString</key> <string>${VERSION}</string>
+    <key>NSHumanReadableCopyright</key> <string>Copyright © 2026 Hyeonse Im</string>
     <key>DiscordClientID</key>         <string>${DISCORD_CLIENT_ID}</string>
     <key>CFBundlePackageType</key>     <string>APPL</string>
     <key>LSMinimumSystemVersion</key>  <string>14.0</string>

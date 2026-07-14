@@ -11,6 +11,7 @@ import Cocoa
 final class MenuBar: NSObject, NSMenuDelegate {
     private let statusItem: NSStatusItem
     private let model: PlayerModel
+    private let appInformationWindow = AppInformationWindowController()
 
     // Menu items we mutate from state — kept as references so we don't rebuild the
     // menu each time. The status row shows the current track; the toggle reflects
@@ -73,11 +74,19 @@ final class MenuBar: NSObject, NSMenuDelegate {
         )
         quitItem.target = self
 
+        let aboutItem = NSMenuItem(
+            title: "About \(AppConfiguration.productName)…",
+            action: #selector(showAbout(_:)),
+            keyEquivalent: ""
+        )
+        aboutItem.target = self
+
         menu.addItem(nowPlayingItem)
         menu.addItem(.separator())
         menu.addItem(showOverlayItem)
         menu.addItem(discordItem)
         menu.addItem(.separator())
+        menu.addItem(aboutItem)
         menu.addItem(quitItem)
 
         statusItem.menu = menu
@@ -91,6 +100,10 @@ final class MenuBar: NSObject, NSMenuDelegate {
         discordItem.state = model.discordEnabled ? .on : .off
     }
 
+    func showAppInformation() {
+        appInformationWindow.show()
+    }
+
     @objc private func toggleOverlay(_ sender: NSMenuItem) {
         model.overlayEnabled.toggle()
         sender.state = model.overlayEnabled ? .on : .off
@@ -101,6 +114,10 @@ final class MenuBar: NSObject, NSMenuDelegate {
         // re-publishes the current track.
         model.discordEnabled.toggle()
         sender.state = model.discordEnabled ? .on : .off
+    }
+
+    @objc private func showAbout(_ sender: NSMenuItem) {
+        showAppInformation()
     }
 
     @objc private func quit(_ sender: NSMenuItem) {

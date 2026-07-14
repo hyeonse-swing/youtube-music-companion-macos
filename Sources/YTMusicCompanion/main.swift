@@ -115,6 +115,15 @@ final class AppDelegate: NSObject, NSApplicationDelegate {
         menuBar = MenuBar(model: model)
 
         model.start()
+
+        // QA helper for a menu-bar agent whose status item is otherwise difficult to
+        // drive in automated UI checks: launch with `--show-about` to open the same
+        // information panel as the menu item.
+        if CommandLine.arguments.contains("--show-about") {
+            DispatchQueue.main.async {
+                self.menuBar?.showAppInformation()
+            }
+        }
     }
 
     func applicationWillTerminate(_ notification: Notification) {
