@@ -13,7 +13,7 @@ final class PlayerModel: ObservableObject {
     @Published var currentIndex: Int = -1
     @Published var isHovering = false
     @Published private(set) var isPlaying = false    // overlay hides when false (paused/stopped/finished)
-    @Published private(set) var isFetching = false   // a lyrics fetch is in flight
+    @Published private(set) var isFetching = false   // metadata or lyrics fetch is in flight
 
     /// User-facing switch from the menubar: when false the overlay window stays off
     /// screen even while music plays (the hover timer in AppDelegate gates on this
@@ -39,6 +39,7 @@ final class PlayerModel: ObservableObject {
 
     private let defaults: UserDefaults
     private let presenceController: DiscordPresenceController
+    private let metadataResolver: TrackMetadataResolving
 
     /// Current "Artist · Title" for the menubar readout, or nil when idle. Uses a
     /// middle dot (no em dash) per the app's text style.
@@ -86,6 +87,15 @@ final class PlayerModel: ObservableObject {
     // without waiting for the next poll.
     private var lastNowPlaying: NowPlaying?
 
+    // YouTube Music may expose a localized/romanized label through MediaRemote. The
+    // source snapshot remains the stable playback identity while these structures
+    // hold the Japanese-storefront metadata used for display, lyrics, and Discord.
+    private var latestSourceSnapshot: NowPlaying?
+    private var metadataCache: [String: TrackMetadata] = [:]
+    private var resolvingMetadataKeys: Set<String> = []
+    private var metadataRetryAfter: [String: Date] = [:]
+    private var activatedTrackKey: String?
+
     // What syncOffset was set to when the current track loaded. Lets `commit`
     // tell a deliberate adjustment from an untouched track, so only songs you
     // actually corrected ever take a slot in `trackOffsets`.
@@ -112,9 +122,11 @@ final class PlayerModel: ObservableObject {
 
     init(
         presenceController: DiscordPresenceController,
+        metadataResolver: TrackMetadataResolving = OriginalScriptMetadataResolver(),
         defaults: UserDefaults = .standard
     ) {
         self.presenceController = presenceController
+        self.metadataResolver = metadataResolver
         self.defaults = defaults
         overlayEnabled = defaults.object(forKey: Self.overlayEnabledKey) as? Bool ?? true
         discordEnabled = defaults.object(forKey: Self.discordEnabledKey) as? Bool ?? true
@@ -163,92 +175,149 @@ final class PlayerModel: ObservableObject {
         }
     }
 
-    private func apply(_ np: NowPlaying?) {
-        guard let np, np.isValid,
-              YouTubeMusicSource.matches(bundle: np.sourceBundle, pid: np.sourcePID) else {
-            isPlaying = false
-            isFetching = false
-            currentTrack = nil
-            lastNowPlaying = nil
-            presenceController.clear()
-            if let leaving = currentTrackKey {
-                commit(for: leaving)           // remember the track that just ended
-                currentTrackKey = nil
-                lines = []
-                currentIndex = -1
-            }
+    private func apply(_ source: NowPlaying?) {
+        guard let source, source.isValid,
+              YouTubeMusicSource.matches(bundle: source.sourceBundle, pid: source.sourcePID) else {
+            clearPlayback()
             return
         }
 
-        // Re-sync interpolation baseline.
-        baseElapsed = np.elapsed
-        baseDate = Date()
-        sampleTimestamp = np.timestamp
-        isPlaying = np.isPlaying && np.rate > 0
-        rate = np.rate > 0 ? np.rate : 1
+        updatePlaybackClock(from: source)
+        latestSourceSnapshot = source
 
-        lastNowPlaying = np
-        if discordEnabled {
-            presenceController.update(for: np)
+        let sourceKey = source.trackKey
+        if sourceKey != currentTrackKey {
+            beginTrack(source, sourceKey: sourceKey)
         }
 
-        // New track? Serve from cache, otherwise fetch its lyrics.
-        if np.trackKey != currentTrackKey {
-            if let leaving = currentTrackKey { commit(for: leaving) }  // remember the track we're leaving
-            // Menubar readout (middle dot separator, no em dash). Track identity is
-            // (artist, title) — the same inputs as trackKey — so it only changes here.
-            currentTrack = np.artist.isEmpty ? np.title : "\(np.artist) · \(np.title)"
-            // Known song → its own saved offset; unseen song → the gentle baseline.
-            syncOffset = trackOffsets[np.trackKey] ?? learnedOffset
-            loadedOffset = syncOffset
-            currentTrackKey = np.trackKey
-            currentIndex = -1
+        if let metadata = metadataCache[sourceKey] {
+            updateActiveTrack(source.applying(metadata), sourceKey: sourceKey)
+        } else if let retryAfter = metadataRetryAfter[sourceKey], retryAfter > Date() {
+            updateActiveTrack(source, sourceKey: sourceKey)
+        } else {
+            metadataRetryAfter.removeValue(forKey: sourceKey)
+            resolveMetadata(for: source, sourceKey: sourceKey)
+        }
+    }
 
-            if let cached = lyricsCache[np.trackKey] {
-                lines = cached
-                isFetching = false
-                return
-            }
-            // In-memory miss → try the disk cache before fetching. A track resolved
-            // in an earlier session loads instantly and offline, dodging LRCLIB's
-            // latency. Promote the hit into the in-memory cache so we read disk at
-            // most once per track per session.
-            if let disk = LyricsCache.load(np.trackKey) {
-                lyricsCache[np.trackKey] = disk
-                lines = disk
-                isFetching = false
-                return
-            }
+    private func clearPlayback() {
+        isPlaying = false
+        isFetching = false
+        currentTrack = nil
+        lastNowPlaying = nil
+        latestSourceSnapshot = nil
+        activatedTrackKey = nil
+        presenceController.clear()
+        if let leaving = currentTrackKey {
+            commit(for: leaving)
+        }
+        currentTrackKey = nil
+        lines = []
+        currentIndex = -1
+    }
 
-            lines = []
-            isFetching = true
-            // Fetch on a plain GCD background queue. The Swift-concurrency +
-            // URLSession bridge stalls under AppKit's run loop, so we avoid it.
-            DispatchQueue.global(qos: .userInitiated).async {
-                let fetched = LRCLIB.fetchSynced(for: np)
-                DispatchQueue.main.async {
-                    guard np.trackKey == self.currentTrackKey else { return }
-                    guard let fetched else {
-                        // Transient failure (504/non-JSON/network). Don't cache, and
-                        // clear currentTrackKey so the next 1s poll re-enters this
-                        // branch and retries — self-healing instead of stuck on the
-                        // loading dots forever. isFetching stays true so hasContent
-                        // keeps the overlay alive across the retry.
-                        self.currentTrackKey = nil
-                        return
-                    }
-                    // Definitive result (lyrics, or a genuine empty). Cache in memory
-                    // either way so replaying the track this session doesn't refetch.
-                    // Persist to disk ONLY when we actually found lyrics: real lyrics
-                    // never go stale, but an empty means "LRCLIB has none *yet*" — which
-                    // is wrong for a newly released track that gets lyrics added days
-                    // later. Keeping the empty in memory only lets the next session
-                    // re-check and pick them up, instead of poisoning the song forever.
-                    self.lyricsCache[np.trackKey] = fetched
-                    if !fetched.isEmpty { LyricsCache.save(fetched, for: np.trackKey) }
-                    self.lines = fetched
-                    self.isFetching = false
+    private func updatePlaybackClock(from source: NowPlaying) {
+        baseElapsed = source.elapsed
+        baseDate = Date()
+        sampleTimestamp = source.timestamp
+        isPlaying = source.isPlaying && source.rate > 0
+        rate = source.rate > 0 ? source.rate : 1
+    }
+
+    private func beginTrack(_ source: NowPlaying, sourceKey: String) {
+        if let leaving = currentTrackKey { commit(for: leaving) }
+
+        currentTrackKey = sourceKey
+        activatedTrackKey = nil
+        lastNowPlaying = nil
+        currentTrack = trackDescription(for: source)
+        syncOffset = trackOffsets[sourceKey] ?? learnedOffset
+        loadedOffset = syncOffset
+        currentIndex = -1
+        lines = []
+        isFetching = true
+        presenceController.clear()
+    }
+
+    private func resolveMetadata(for source: NowPlaying, sourceKey: String) {
+        guard resolvingMetadataKeys.insert(sourceKey).inserted else { return }
+        let resolver = metadataResolver
+
+        Task.detached(priority: .utility) {
+            let metadata = resolver.resolve(for: source)
+            await self.finishMetadataResolution(metadata, sourceKey: sourceKey)
+        }
+    }
+
+    private func finishMetadataResolution(_ metadata: TrackMetadata?, sourceKey: String) {
+        resolvingMetadataKeys.remove(sourceKey)
+        guard
+            currentTrackKey == sourceKey,
+            let latest = latestSourceSnapshot,
+            latest.trackKey == sourceKey
+        else { return }
+
+        guard let metadata else {
+            // Keep playback functional while offline, then retry at a restrained
+            // interval instead of either giving up for the session or hammering the
+            // storefront once per one-second playback poll.
+            metadataRetryAfter[sourceKey] = Date().addingTimeInterval(15)
+            updateActiveTrack(latest, sourceKey: sourceKey)
+            return
+        }
+
+        metadataCache[sourceKey] = metadata
+        updateActiveTrack(latest.applying(metadata), sourceKey: sourceKey)
+    }
+
+    private func updateActiveTrack(_ track: NowPlaying, sourceKey: String) {
+        lastNowPlaying = track
+        currentTrack = trackDescription(for: track)
+        if discordEnabled { presenceController.update(for: track) }
+
+        guard activatedTrackKey != sourceKey else { return }
+        activatedTrackKey = sourceKey
+        loadLyrics(for: track, cacheKey: sourceKey)
+    }
+
+    private func trackDescription(for track: NowPlaying) -> String {
+        track.artist.isEmpty ? track.title : "\(track.artist) · \(track.title)"
+    }
+
+    private func loadLyrics(for track: NowPlaying, cacheKey: String) {
+        if let cached = lyricsCache[cacheKey] {
+            lines = cached
+            isFetching = false
+            return
+        }
+
+        // In-memory miss → try the disk cache before fetching. A track resolved in an
+        // earlier session loads instantly and offline. The source metadata key stays
+        // stable even when its displayed title was replaced with the original script.
+        if let disk = LyricsCache.load(cacheKey) {
+            lyricsCache[cacheKey] = disk
+            lines = disk
+            isFetching = false
+            return
+        }
+
+        lines = []
+        isFetching = true
+        DispatchQueue.global(qos: .userInitiated).async {
+            let fetched = LRCLIB.fetchSynced(for: track)
+            DispatchQueue.main.async {
+                guard cacheKey == self.currentTrackKey else { return }
+                guard let fetched else {
+                    // A transient LRCLIB failure retries on the next playback poll,
+                    // without throwing away the already-resolved original metadata.
+                    self.activatedTrackKey = nil
+                    return
                 }
+
+                self.lyricsCache[cacheKey] = fetched
+                if !fetched.isEmpty { LyricsCache.save(fetched, for: cacheKey) }
+                self.lines = fetched
+                self.isFetching = false
             }
         }
     }

@@ -149,6 +149,18 @@ final class AppDelegate: NSObject, NSApplicationDelegate {
     }
 }
 
+// Debug: resolve the current MediaRemote snapshot exactly as the running app will.
+if CommandLine.arguments.contains("--now-original") {
+    guard let source = MediaRemoteBridge.query() else {
+        print("NOW → nothing playing")
+        exit(1)
+    }
+    let metadata = OriginalScriptMetadataResolver().resolve(for: source) ?? source.metadata
+    print("SOURCE   → \(source.artist) — \(source.title) [\(source.album)]")
+    print("ORIGINAL → \(metadata.artist) — \(metadata.title) [\(metadata.album)]")
+    exit(0)
+}
+
 // Debug: `YTMusicCompanion --now` → print the current MediaRemote read once, exit.
 if CommandLine.arguments.contains("--now") {
     if let np = MediaRemoteBridge.query() {
@@ -157,6 +169,36 @@ if CommandLine.arguments.contains("--now") {
     } else {
         print("NOW → nothing playing")
     }
+    exit(0)
+}
+
+// Debug: resolve a localized/romanized label through the Japanese storefront.
+// `YTMusicCompanion --metadata "Artist" "Title" duration ["Album"]`
+if let index = CommandLine.arguments.firstIndex(of: "--metadata") {
+    let arguments = CommandLine.arguments
+    guard index + 3 < arguments.count else {
+        FileHandle.standardError.write(
+            "usage: YTMusicCompanion --metadata \"Artist\" \"Title\" <duration> [\"Album\"]\n"
+                .data(using: .utf8)!
+        )
+        exit(2)
+    }
+
+    let source = NowPlaying(
+        title: arguments[index + 2],
+        artist: arguments[index + 1],
+        album: index + 4 < arguments.count ? arguments[index + 4] : "",
+        duration: Double(arguments[index + 3]) ?? 0,
+        elapsed: 0,
+        timestamp: 0,
+        isPlaying: true,
+        rate: 1,
+        sourceBundle: "",
+        sourcePID: 0
+    )
+    let metadata = OriginalScriptMetadataResolver().resolve(for: source) ?? source.metadata
+    print("SOURCE   → \(source.artist) — \(source.title) [\(source.album)]")
+    print("ORIGINAL → \(metadata.artist) — \(metadata.title) [\(metadata.album)]")
     exit(0)
 }
 
