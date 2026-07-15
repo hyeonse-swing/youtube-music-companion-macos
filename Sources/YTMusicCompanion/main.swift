@@ -177,15 +177,21 @@ final class AppDelegate: NSObject, NSApplicationDelegate {
     }
 }
 
-// Debug: resolve the current MediaRemote snapshot exactly as the running app will.
-if CommandLine.arguments.contains("--now-original") {
+// Debug: read the exact labels visible in YouTube Music's player bar.
+if CommandLine.arguments.contains("--now-page") ||
+    CommandLine.arguments.contains("--now-original")
+{
     guard let source = MediaRemoteBridge.query() else {
         print("NOW → nothing playing")
         exit(1)
     }
-    let metadata = OriginalScriptMetadataResolver().resolve(for: source) ?? source.metadata
+    let pageMetadata = YouTubeMusicPageMetadataResolver(
+        promptsForAccessibilityPermission: false
+    ).resolve(for: source)
+    let metadata = pageMetadata ?? source.metadata
     print("SOURCE   → \(source.artist) — \(source.title) [\(source.album)]")
-    print("ORIGINAL → \(metadata.artist) — \(metadata.title) [\(metadata.album)]")
+    print("DISPLAY  → \(metadata.artist) — \(metadata.title) [\(metadata.album)]")
+    print("SCREEN   → \(pageMetadata == nil ? "unavailable" : "exact player-bar labels")")
     exit(0)
 }
 
@@ -213,7 +219,9 @@ if CommandLine.arguments.contains("--now-artwork") {
         print("DISCORD → no current track")
         exit(1)
     }
-    let metadata = OriginalScriptMetadataResolver().resolve(for: source) ?? source.metadata
+    let metadata = YouTubeMusicPageMetadataResolver(
+        promptsForAccessibilityPermission: false
+    ).resolve(for: source) ?? source.metadata
     let display = source.applying(metadata)
     let candidates = ITunesArtworkCatalog().candidateURLs(for: display)
     print("CATALOG → \(candidates.count) plausible public cover(s)")

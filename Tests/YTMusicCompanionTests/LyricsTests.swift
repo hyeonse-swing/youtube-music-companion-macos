@@ -88,6 +88,13 @@ final class LyricsTests: XCTestCase {
         XCTAssertEqual(LRCLIB.baseTitle("(Intro)"), "(Intro)")    // would empty → keep original
     }
 
+    func testBilingualTitleTriesTheFullJapaneseAndEnglishLabels() {
+        XCTAssertEqual(
+            LRCLIB.titleVariants("鋼の羽根 - Iron Feather"),
+            ["鋼の羽根 - Iron Feather", "鋼の羽根", "Iron Feather"]
+        )
+    }
+
     // MARK: - containsHangul
 
     func testDetectsHangul() {

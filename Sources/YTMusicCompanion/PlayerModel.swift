@@ -65,6 +65,12 @@ final class PlayerModel: ObservableObject {
 
     var isDiscordConfigured: Bool { presenceController.isConfigured }
 
+    var hasExactMetadataAccess: Bool { AccessibilityPermission.isGranted }
+
+    func requestExactMetadataAccess() {
+        AccessibilityPermission.requestFromMenu()
+    }
+
     /// Whether the overlay window should be on screen at all: only when music is
     /// playing AND we either have lyrics or are still looking them up. No music,
     /// or a track with no synced lyrics → the window is hidden entirely (not just
@@ -99,9 +105,8 @@ final class PlayerModel: ObservableObject {
     // without waiting for the next poll.
     private var lastNowPlaying: NowPlaying?
 
-    // YouTube Music may expose a localized/romanized label through MediaRemote. The
-    // source snapshot remains the stable playback identity while these structures
-    // hold the Japanese-storefront metadata used for display, lyrics, and Discord.
+    // MediaRemote remains the stable playback identity. YouTube Music's player bar
+    // supplies the exact visible labels used for display, lyrics, and Discord.
     private var latestSourceSnapshot: NowPlaying?
     private var metadataCache: [String: TrackMetadata] = [:]
     private var resolvingMetadataKeys: Set<String> = []
@@ -141,7 +146,7 @@ final class PlayerModel: ObservableObject {
 
     init(
         presenceController: DiscordPresenceController,
-        metadataResolver: TrackMetadataResolving = OriginalScriptMetadataResolver(),
+        metadataResolver: TrackMetadataResolving = YouTubeMusicPageMetadataResolver(),
         artworkQuery: NowPlayingArtworkQuerying = DefaultNowPlayingArtworkQuery(),
         defaults: UserDefaults = .standard
     ) {
@@ -362,7 +367,7 @@ final class PlayerModel: ObservableObject {
 
         // In-memory miss → try the disk cache before fetching. A track resolved in an
         // earlier session loads instantly and offline. The source metadata key stays
-        // stable even when its displayed title was replaced with the original script.
+        // stable even when its displayed title was replaced with the page label.
         if let disk = LyricsCache.load(cacheKey) {
             lyricsCache[cacheKey] = disk
             lines = disk
@@ -378,7 +383,7 @@ final class PlayerModel: ObservableObject {
                 guard cacheKey == self.currentTrackKey else { return }
                 guard let fetched else {
                     // A transient LRCLIB failure retries on the next playback poll,
-                    // without throwing away the already-resolved original metadata.
+                    // without throwing away the already-resolved page metadata.
                     self.activatedTrackKey = nil
                     return
                 }

@@ -5,10 +5,9 @@ A focused macOS menu-bar app for the installed YouTube Music web app. It:
 - Shows synchronized lyrics in a transparent, click-through overlay.
 - Shows the exact YouTube Music cover supplied to macOS in the Now Playing panel.
 - Publishes the current track, visually verified artwork, and progress to Discord Rich Presence.
-- Restores Japanese titles, artists, and albums when YouTube Music exposes a
-  localized or romanized label.
-- Shows the current track, playback progress, and the exact value reported by
-  YouTube Music in a native **Now Playing** panel.
+- Uses the exact title, artist, and album rendered in YouTube Music's player bar,
+  including bilingual labels such as `鋼の羽根 - Iron Feather`.
+- Shows the current track and playback progress in a native **Now Playing** panel.
 
 Other players and ordinary browser tabs are intentionally ignored.
 
@@ -18,6 +17,8 @@ version, build number, Discord configuration status, bundle identifier, and proj
 ## Menu and overlay controls
 
 - **Show Now Playing…** opens the current-track panel.
+- **Enable Exact YouTube Music Metadata…** opens Accessibility settings when the
+  required permission has not been granted yet.
 - Drag the current lyric line to move the overlay. Its position is restored at the
   next launch and falls back automatically if a display is disconnected.
 - **Reset Lyrics Position** returns the overlay to the bottom of the primary display.
@@ -29,6 +30,14 @@ version, build number, Discord configuration status, bundle identifier, and proj
 - Discord desktop app for Rich Presence
 - YouTube Music installed as a Chromium web app
 - Swift 5.9 or later to build from source
+
+On first playback, allow **Accessibility** access when macOS asks. It is used only
+to read the title, artist, and album labels in YouTube Music's player bar. Until
+permission is granted, the app safely falls back to the English-only labels that
+Chrome sends to macOS.
+
+If macOS does not show the prompt, choose **Enable Exact YouTube Music Metadata…**
+from the menu-bar menu, then enable YT Music Companion in Accessibility settings.
 
 ### Install YouTube Music as an app
 
@@ -65,7 +74,7 @@ Useful probes:
 
 ```sh
 .build/debug/YTMusicCompanion --now
-.build/debug/YTMusicCompanion --now-original
+.build/debug/YTMusicCompanion --now-page
 .build/debug/YTMusicCompanion --now-artwork
 .build/debug/YTMusicCompanion --metadata "Kenshi Yonezu" "Shunrai" 289
 .build/debug/YTMusicCompanion --probe "Artist" "Title" 200
@@ -79,9 +88,11 @@ DISCORD_CLIENT_ID=your_application_id .build/debug/YTMusicCompanion --discord
 - `NowPlayingArtwork.swift`: requests the actual cover once per track, keeps it in
   memory, and verifies any public Discord artwork URL against those pixels.
 - `YouTubeMusicSource.swift`: accepts only the installed YouTube Music web app.
-- `OriginalScriptMetadataResolver.swift`: verifies Japanese storefront metadata and
-  prefers an artist's canonical release over matching compilation albums.
-- `PlayerModel.swift`: coordinates playback polling, original metadata, lyrics, timing,
+- `YouTubeMusicPageMetadataResolver.swift`: reads the exact visible player-bar labels
+  through macOS Accessibility and rejects a stale previous-track page.
+- `OriginalScriptMetadataResolver.swift`: retains the optional storefront probe used
+  by the `--metadata` development command; it is not used for displayed metadata.
+- `PlayerModel.swift`: coordinates playback polling, page metadata, lyrics, timing,
   and menu state.
 - `DiscordPresenceController.swift`: publishes only pixel-verified public artwork URLs
   and manages successful-send deduplication and retry.
@@ -97,10 +108,9 @@ Discord cannot receive local image bytes. The app searches for a public catalog
 cover and uses it only when its pixels match the actual YouTube Music cover; if no
 verified match exists, Discord keeps the configured YouTube Music fallback icon.
 
-Original-script resolution is deliberately conservative. A similar duration or search
-rank is never sufficient by itself. If the same catalog ID cannot be verified against
-MediaRemote's title and artist, the app keeps YouTube Music's label instead of guessing.
-The storefront is used only as a metadata lookup; Apple Music playback is never monitored.
+Displayed metadata is not looked up in Apple Music or another music catalog. The app
+reads YouTube Music's visible player bar and only checks that its title still belongs
+to the MediaRemote track, preventing a brief previous-track UI state from being shown.
 
 ## Build a release app
 

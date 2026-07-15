@@ -81,27 +81,6 @@ private struct NowPlayingPanelView: View {
             .font(.subheadline)
             .foregroundStyle(.secondary)
 
-            if display.metadata != source.metadata {
-                Divider()
-                VStack(alignment: .leading, spacing: 5) {
-                    Text("Reported by YouTube Music")
-                        .font(.caption.weight(.semibold))
-                        .foregroundStyle(.secondary)
-                    Text(source.title)
-                        .font(.body.weight(.medium))
-                        .textSelection(.enabled)
-                    Text(source.artist)
-                        .font(.subheadline)
-                        .foregroundStyle(.secondary)
-                        .textSelection(.enabled)
-                    if !source.album.isEmpty {
-                        Text(source.album)
-                            .font(.caption)
-                            .foregroundStyle(.tertiary)
-                            .textSelection(.enabled)
-                    }
-                }
-            }
         }
     }
 

@@ -20,6 +20,7 @@ final class MenuBar: NSObject, NSMenuDelegate {
     // model.overlayEnabled.
     private let nowPlayingItem: NSMenuItem
     private let showNowPlayingItem: NSMenuItem
+    private let exactMetadataItem: NSMenuItem
     private let showOverlayItem: NSMenuItem
     private let discordItem: NSMenuItem
 
@@ -35,6 +36,12 @@ final class MenuBar: NSObject, NSMenuDelegate {
         showNowPlayingItem = NSMenuItem(
             title: "Show Now Playing…",
             action: #selector(showNowPlaying(_:)),
+            keyEquivalent: ""
+        )
+
+        exactMetadataItem = NSMenuItem(
+            title: "Enable Exact YouTube Music Metadata…",
+            action: #selector(requestExactMetadataAccess(_:)),
             keyEquivalent: ""
         )
 
@@ -80,6 +87,8 @@ final class MenuBar: NSObject, NSMenuDelegate {
 
         showNowPlayingItem.target = self
         showNowPlayingItem.isEnabled = model.hasNowPlaying
+        exactMetadataItem.target = self
+        updateExactMetadataItem()
 
         let resetOverlayItem = NSMenuItem(
             title: "Reset Lyrics Position",
@@ -105,6 +114,7 @@ final class MenuBar: NSObject, NSMenuDelegate {
         menu.addItem(nowPlayingItem)
         menu.addItem(.separator())
         menu.addItem(showNowPlayingItem)
+        menu.addItem(exactMetadataItem)
         menu.addItem(showOverlayItem)
         menu.addItem(resetOverlayItem)
         menu.addItem(discordItem)
@@ -120,6 +130,7 @@ final class MenuBar: NSObject, NSMenuDelegate {
     func menuNeedsUpdate(_ menu: NSMenu) {
         nowPlayingItem.title = model.nowPlayingDescription
         showNowPlayingItem.isEnabled = model.hasNowPlaying
+        updateExactMetadataItem()
         showOverlayItem.state = model.overlayEnabled ? .on : .off
         discordItem.state = model.discordEnabled ? .on : .off
     }
@@ -148,6 +159,11 @@ final class MenuBar: NSObject, NSMenuDelegate {
         showNowPlayingPanel()
     }
 
+    @objc private func requestExactMetadataAccess(_ sender: NSMenuItem) {
+        model.requestExactMetadataAccess()
+        updateExactMetadataItem()
+    }
+
     @objc private func resetLyricsPosition(_ sender: NSMenuItem) {
         resetOverlayPosition()
     }
@@ -158,5 +174,15 @@ final class MenuBar: NSObject, NSMenuDelegate {
 
     @objc private func quit(_ sender: NSMenuItem) {
         NSApp.terminate(nil)
+    }
+
+    private func updateExactMetadataItem() {
+        if model.hasExactMetadataAccess {
+            exactMetadataItem.title = "Exact YouTube Music Metadata"
+            exactMetadataItem.state = .on
+        } else {
+            exactMetadataItem.title = "Enable Exact YouTube Music Metadata…"
+            exactMetadataItem.state = .off
+        }
     }
 }

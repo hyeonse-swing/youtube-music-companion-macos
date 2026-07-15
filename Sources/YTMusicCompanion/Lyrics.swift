@@ -87,17 +87,28 @@ enum LRCLIB {
     /// Returns the found lines (nil = none found) plus whether any request failed
     /// transiently.
     private static func attempt(_ track: NowPlaying, artist: String) -> (lines: [LyricLine]?, failed: Bool) {
-        var titles = [track.title]
-        for variant in [simplifiedTitle(track.title), baseTitle(track.title)] {
-            if !variant.isEmpty, !titles.contains(variant) { titles.append(variant) }
-        }
         var failed = false
-        for title in titles {
+        for title in titleVariants(track.title) {
             let r = resolve(track, artist: artist, title: title)
             if let lines = r.lines, !lines.isEmpty { return (lines, false) }
             failed = failed || r.failed
         }
         return (nil, failed)
+    }
+
+    static func titleVariants(_ title: String) -> [String] {
+        let components = title.components(separatedBy: " - ")
+            .map { $0.trimmingCharacters(in: .whitespacesAndNewlines) }
+            .filter { !$0.isEmpty }
+        let rawTitles = components.count > 1 ? [title] + components : [title]
+
+        var variants: [String] = []
+        for candidate in rawTitles + rawTitles.flatMap({
+            [simplifiedTitle($0), baseTitle($0)]
+        }) where !candidate.isEmpty && !variants.contains(candidate) {
+            variants.append(candidate)
+        }
+        return variants
     }
 
     /// Resolve for a specific artist + title spelling. Fetches the canonical (`/api/get`)
