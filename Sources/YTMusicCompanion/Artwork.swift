@@ -1,5 +1,69 @@
 import Foundation
 
+protocol ArtworkCatalogSearching: Sendable {
+    /// Returns publicly reachable artwork thumbnails ordered from most to least likely.
+    func candidateURLs(for track: NowPlaying) -> [URL]
+}
+
+protocol ArtworkDataLoading: Sendable {
+    func data(from url: URL) -> Data?
+}
+
+struct ITunesArtworkCatalog: ArtworkCatalogSearching {
+    func candidateURLs(for track: NowPlaying) -> [URL] {
+        Artwork.iTunesCandidateURLs(for: track)
+    }
+}
+
+struct CurlArtworkDataLoader: ArtworkDataLoading {
+    func data(from url: URL) -> Data? {
+        let process = Process()
+        process.executableURL = URL(fileURLWithPath: "/usr/bin/curl")
+        process.arguments = [
+            "-fsSL",
+            "--max-time", "8",
+            "-H", "User-Agent: \(AppConfiguration.userAgent)",
+            url.absoluteString,
+        ]
+
+        let output = Pipe()
+        process.standardOutput = output
+        process.standardError = FileHandle.nullDevice
+        do { try process.run() } catch { return nil }
+
+        let data = output.fileHandleForReading.readDataToEndOfFile()
+        process.waitUntilExit()
+        guard process.terminationStatus == 0, !data.isEmpty else { return nil }
+        return data
+    }
+}
+
+/// Discord needs a public URL, while MediaRemote supplies private in-memory bytes.
+/// A catalog URL is therefore accepted only when its decoded pixels match those bytes.
+struct VerifiedArtworkResolver: ArtworkResolving {
+    private let catalog: ArtworkCatalogSearching
+    private let loader: ArtworkDataLoading
+
+    init(
+        catalog: ArtworkCatalogSearching = ITunesArtworkCatalog(),
+        loader: ArtworkDataLoading = CurlArtworkDataLoader()
+    ) {
+        self.catalog = catalog
+        self.loader = loader
+    }
+
+    func coverURL(for track: NowPlaying, sourceArtwork: NowPlayingArtwork) -> String? {
+        for candidateURL in catalog.candidateURLs(for: track) {
+            guard
+                let candidateData = loader.data(from: candidateURL),
+                ArtworkImageMatcher.isSameArtwork(sourceArtwork.data, candidateData)
+            else { continue }
+            return Artwork.upgradedURL(candidateURL).absoluteString
+        }
+        return nil
+    }
+}
+
 /// Resolves album cover art for a track via the iTunes Search API.
 ///
 /// Discord's `large_image` can't take local artwork bytes — it needs a pre-uploaded
@@ -51,10 +115,85 @@ enum Artwork {
             if matchesResult(artist: artist, title: title,
                              resultArtist: resultArtist, resultTitle: resultTitle) {
                 // Upgrade resolution: the API hands back a 100×100 thumbnail.
-                return art.replacingOccurrences(of: "100x100", with: "512x512")
+                return upgradedURLString(art)
             }
         }
         return nil
+    }
+
+    /// Returns a small, ordered set of plausible public covers. Pixel verification is
+    /// deliberately performed by `VerifiedArtworkResolver`, not by this text search.
+    static func iTunesCandidateURLs(for track: NowPlaying) -> [URL] {
+        let firstArtist = LRCLIB.primaryArtist(track.artist)
+        let term = normalizeSearchTerm("\(track.title) \(firstArtist)")
+        guard !term.isEmpty else { return [] }
+
+        var scored: [(url: URL, score: CandidateScore)] = []
+        for storefront in [("JP", "ja_jp"), ("US", "en_us")] {
+            var components = URLComponents(string: "https://itunes.apple.com/search")
+            components?.queryItems = [
+                .init(name: "term", value: term),
+                .init(name: "country", value: storefront.0),
+                .init(name: "lang", value: storefront.1),
+                .init(name: "media", value: "music"),
+                .init(name: "entity", value: "song"),
+                .init(name: "limit", value: "15"),
+            ]
+            guard
+                let json = curlJSON(components?.url) as? [String: Any],
+                let results = json["results"] as? [[String: Any]]
+            else { continue }
+
+            for (index, result) in results.enumerated() {
+                guard
+                    let rawURL = result["artworkUrl100"] as? String,
+                    let url = URL(string: rawURL),
+                    let resultTitle = result["trackName"] as? String,
+                    let resultArtist = result["artistName"] as? String,
+                    matchesResult(
+                        artist: track.artist,
+                        title: track.title,
+                        resultArtist: resultArtist,
+                        resultTitle: resultTitle
+                    )
+                else { continue }
+
+                let resultAlbum = (result["collectionName"] as? String) ?? ""
+                let millis = (result["trackTimeMillis"] as? NSNumber)?.doubleValue ?? 0
+                let durationDelta = track.duration > 0 && millis > 0
+                    ? abs(track.duration - millis / 1_000)
+                    : .infinity
+                scored.append((
+                    url,
+                    CandidateScore(
+                        albumMatches: !track.album.isEmpty && fieldMatches(track.album, resultAlbum),
+                        durationDelta: durationDelta,
+                        resultIndex: index
+                    )
+                ))
+            }
+        }
+
+        let sorted = scored.sorted { left, right in
+            if left.score.albumMatches != right.score.albumMatches {
+                return left.score.albumMatches
+            }
+            if left.score.durationDelta != right.score.durationDelta {
+                return left.score.durationDelta < right.score.durationDelta
+            }
+            return left.score.resultIndex < right.score.resultIndex
+        }
+
+        var seen = Set<String>()
+        return sorted.compactMap { item in
+            let key = upgradedURL(item.url).absoluteString
+            guard seen.insert(key).inserted else { return nil }
+            return item.url
+        }.prefix(12).map { $0 }
+    }
+
+    static func upgradedURL(_ url: URL) -> URL {
+        URL(string: upgradedURLString(url.absoluteString)) ?? url
     }
 
     // MARK: - Pure helpers (testable)
@@ -62,11 +201,13 @@ enum Artwork {
     /// NFD-normalize, strip diacritics, strip punctuation, collapse whitespace,
     /// lowercase. Ports the sibling project's `normalizeSearchTerm`.
     static func normalizeSearchTerm(_ s: String) -> String {
-        // Decompose then drop combining marks (diacritics).
-        let decomposed = s.decomposedStringWithCanonicalMapping
-        let noDiacritics = String(decomposed.unicodeScalars.filter {
-            !CharacterSet.nonBaseCharacters.contains($0)
-        })
+        // Foundation's locale-aware fold removes Latin diacritics without stripping
+        // Japanese dakuten/handakuten (a raw NFD combining-mark filter corrupts
+        // パレード into ハレート and makes the catalog query miss).
+        let noDiacritics = s.folding(
+            options: [.diacriticInsensitive, .caseInsensitive],
+            locale: Locale(identifier: "en_US_POSIX")
+        )
         // Keep letters/numbers/whitespace; everything else becomes a space.
         let cleaned = String(noDiacritics.unicodeScalars.map {
             (CharacterSet.alphanumerics.contains($0) || CharacterSet.whitespaces.contains($0))
@@ -90,7 +231,7 @@ enum Artwork {
 
     /// Conservative field match. A single shared word is not enough: that was able
     /// to attach artwork from an unrelated search result.
-    private static func fieldMatches(_ a: String, _ b: String) -> Bool {
+    static func fieldMatches(_ a: String, _ b: String) -> Bool {
         let na = normalizeSearchTerm(a)
         let nb = normalizeSearchTerm(b)
         if na.isEmpty || nb.isEmpty { return false }
@@ -115,6 +256,20 @@ enum Artwork {
         return Set(value.split(separator: " ").map(String.init).filter {
             $0.count > 1 && !ignored.contains($0)
         })
+    }
+
+    private struct CandidateScore {
+        let albumMatches: Bool
+        let durationDelta: Double
+        let resultIndex: Int
+    }
+
+    private static func upgradedURLString(_ value: String) -> String {
+        value.replacingOccurrences(
+            of: #"\d+x\d+(?=[a-z]*\.)"#,
+            with: "512x512",
+            options: .regularExpression
+        )
     }
 
     // MARK: - networking

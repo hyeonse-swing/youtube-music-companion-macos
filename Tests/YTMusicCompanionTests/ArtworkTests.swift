@@ -21,6 +21,10 @@ final class ArtworkTests: XCTestCase {
         XCTAssertEqual(Artwork.normalizeSearchTerm("Up&Down"), "up down")
     }
 
+    func testNormalizePreservesJapaneseVoicingMarks() {
+        XCTAssertEqual(Artwork.normalizeSearchTerm("パレード ヨルシカ"), "パレード ヨルシカ")
+    }
+
     // MARK: - primaryArtist (consolidated lead-artist extractor, shared with lyrics)
 
     func testGetFirstArtistSplitsOnFeat() {

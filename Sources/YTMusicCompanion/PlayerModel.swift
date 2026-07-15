@@ -16,6 +16,7 @@ final class PlayerModel: ObservableObject {
     @Published private(set) var isFetching = false   // metadata or lyrics fetch is in flight
     @Published private(set) var sourceNowPlaying: NowPlaying?
     @Published private(set) var displayNowPlaying: NowPlaying?
+    @Published private(set) var nowPlayingArtwork: NowPlayingArtwork?
     @Published private(set) var playbackElapsed: Double = 0
 
     /// User-facing switch from the menubar: when false the overlay window stays off
@@ -33,7 +34,12 @@ final class PlayerModel: ObservableObject {
             guard discordEnabled != oldValue else { return }
             defaults.set(discordEnabled, forKey: Self.discordEnabledKey)
             if discordEnabled {
-                if let lastNowPlaying { presenceController.update(for: lastNowPlaying) }
+                if let lastNowPlaying {
+                    presenceController.update(
+                        for: lastNowPlaying,
+                        sourceArtwork: nowPlayingArtwork
+                    )
+                }
             } else {
                 presenceController.clear()
             }
@@ -43,6 +49,7 @@ final class PlayerModel: ObservableObject {
     private let defaults: UserDefaults
     private let presenceController: DiscordPresenceController
     private let metadataResolver: TrackMetadataResolving
+    private let artworkQuery: NowPlayingArtworkQuerying
 
     /// Current "Artist · Title" for the menubar readout, or nil when idle. Uses a
     /// middle dot (no em dash) per the app's text style.
@@ -101,6 +108,13 @@ final class PlayerModel: ObservableObject {
     private var metadataRetryAfter: [String: Date] = [:]
     private var activatedTrackKey: String?
 
+    // Artwork is requested exactly once when a track begins. Successful bytes and
+    // definitive misses are retained for this app session, so one-second playback
+    // polling never performs image work and replaying a track is instant.
+    private var artworkCache: [String: NowPlayingArtwork] = [:]
+    private var missingArtworkKeys: Set<String> = []
+    private var resolvingArtworkKeys: Set<String> = []
+
     // What syncOffset was set to when the current track loaded. Lets `commit`
     // tell a deliberate adjustment from an untouched track, so only songs you
     // actually corrected ever take a slot in `trackOffsets`.
@@ -128,10 +142,12 @@ final class PlayerModel: ObservableObject {
     init(
         presenceController: DiscordPresenceController,
         metadataResolver: TrackMetadataResolving = OriginalScriptMetadataResolver(),
+        artworkQuery: NowPlayingArtworkQuerying = DefaultNowPlayingArtworkQuery(),
         defaults: UserDefaults = .standard
     ) {
         self.presenceController = presenceController
         self.metadataResolver = metadataResolver
+        self.artworkQuery = artworkQuery
         self.defaults = defaults
         overlayEnabled = defaults.object(forKey: Self.overlayEnabledKey) as? Bool ?? true
         discordEnabled = defaults.object(forKey: Self.discordEnabledKey) as? Bool ?? true
@@ -214,6 +230,7 @@ final class PlayerModel: ObservableObject {
         latestSourceSnapshot = nil
         sourceNowPlaying = nil
         displayNowPlaying = nil
+        nowPlayingArtwork = nil
         playbackElapsed = 0
         activatedTrackKey = nil
         presenceController.clear()
@@ -248,6 +265,7 @@ final class PlayerModel: ObservableObject {
         lines = []
         isFetching = true
         presenceController.clear()
+        loadArtwork(sourceKey: sourceKey)
     }
 
     private func resolveMetadata(for source: NowPlaying, sourceKey: String) {
@@ -285,11 +303,50 @@ final class PlayerModel: ObservableObject {
         lastNowPlaying = track
         displayNowPlaying = track
         currentTrack = trackDescription(for: track)
-        if discordEnabled { presenceController.update(for: track) }
+        if discordEnabled {
+            presenceController.update(for: track, sourceArtwork: nowPlayingArtwork)
+        }
 
         guard activatedTrackKey != sourceKey else { return }
         activatedTrackKey = sourceKey
         loadLyrics(for: track, cacheKey: sourceKey)
+    }
+
+    private func loadArtwork(sourceKey: String) {
+        if let cached = artworkCache[sourceKey] {
+            nowPlayingArtwork = cached
+            return
+        }
+        nowPlayingArtwork = nil
+        guard
+            !missingArtworkKeys.contains(sourceKey),
+            resolvingArtworkKeys.insert(sourceKey).inserted
+        else { return }
+
+        let query = artworkQuery
+        Task.detached(priority: .utility) {
+            let artwork = query.query()
+            await self.finishArtworkLoad(artwork, sourceKey: sourceKey)
+        }
+    }
+
+    private func finishArtworkLoad(_ artwork: NowPlayingArtwork?, sourceKey: String) {
+        resolvingArtworkKeys.remove(sourceKey)
+        guard
+            currentTrackKey == sourceKey,
+            latestSourceSnapshot?.trackKey == sourceKey
+        else { return }
+
+        if let artwork {
+            artworkCache[sourceKey] = artwork
+            nowPlayingArtwork = artwork
+            if discordEnabled, let lastNowPlaying {
+                presenceController.update(for: lastNowPlaying, sourceArtwork: artwork)
+            }
+        } else {
+            missingArtworkKeys.insert(sourceKey)
+            nowPlayingArtwork = nil
+        }
     }
 
     private func trackDescription(for track: NowPlaying) -> String {

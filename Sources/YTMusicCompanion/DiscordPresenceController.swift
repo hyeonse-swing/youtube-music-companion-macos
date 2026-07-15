@@ -1,13 +1,7 @@
 import Foundation
 
 protocol ArtworkResolving: Sendable {
-    func coverURL(for track: NowPlaying) -> String?
-}
-
-struct DefaultArtworkResolver: ArtworkResolving {
-    func coverURL(for track: NowPlaying) -> String? {
-        Artwork.coverURL(title: track.title, artist: track.artist, album: track.album)
-    }
+    func coverURL(for track: NowPlaying, sourceArtwork: NowPlayingArtwork) -> String?
 }
 
 /// Converts YouTube Music snapshots into Discord activity and owns delivery state.
@@ -19,17 +13,19 @@ final class DiscordPresenceController {
     private let artworkResolver: ArtworkResolving
 
     private var lastTrack: NowPlaying?
+    private var lastArtwork: NowPlayingArtwork?
     private var lastPublishedKey: String?
     private var lastPublishedStart: Double = 0
     private var pendingKey: String?
     private var stateVersion = 0
 
-    private var artworkCache: [String: String?] = [:]
+    private var artworkCache: [String: String] = [:]
+    private var artworkMisses: Set<String> = []
     private var artworkResolving: Set<String> = []
 
     init(
         publisher: PresencePublishing,
-        artworkResolver: ArtworkResolving = DefaultArtworkResolver()
+        artworkResolver: ArtworkResolving = VerifiedArtworkResolver()
     ) {
         self.publisher = publisher
         self.artworkResolver = artworkResolver
@@ -37,8 +33,9 @@ final class DiscordPresenceController {
 
     var isConfigured: Bool { publisher.isConfigured }
 
-    func update(for track: NowPlaying) {
+    func update(for track: NowPlaying, sourceArtwork: NowPlayingArtwork? = nil) {
         lastTrack = track
+        lastArtwork = sourceArtwork
         guard track.isPlaying, track.rate > 0 else {
             clear()
             return
@@ -48,8 +45,8 @@ final class DiscordPresenceController {
             ? track.timestamp
             : Date().timeIntervalSince1970
         let startEpoch = reference - track.elapsed
-        let artworkURL = resolvedArtwork(for: track)
-        let publicationKey = "\(track.trackKey)|\(track.duration > 0)|\(artworkURL != nil)"
+        let artworkURL = resolvedArtwork(for: track, sourceArtwork: sourceArtwork)
+        let publicationKey = "\(track.trackKey)|\(track.duration > 0)|\(artworkURL ?? "fallback")"
         let seeked = track.timestamp > 0 && abs(startEpoch - lastPublishedStart) > 3
 
         guard pendingKey != publicationKey else { return }
@@ -82,6 +79,7 @@ final class DiscordPresenceController {
         let hadPublishedOrPendingActivity = lastPublishedKey != nil || pendingKey != nil
         stateVersion += 1
         lastTrack = nil
+        lastArtwork = nil
         pendingKey = nil
         lastPublishedKey = nil
         lastPublishedStart = 0
@@ -121,24 +119,40 @@ final class DiscordPresenceController {
         )
     }
 
-    private func resolvedArtwork(for track: NowPlaying) -> String? {
-        if let cached = artworkCache[track.trackKey] {
+    private func resolvedArtwork(
+        for track: NowPlaying,
+        sourceArtwork: NowPlayingArtwork?
+    ) -> String? {
+        guard let sourceArtwork else { return nil }
+        let cacheKey = "\(track.trackKey)|\(sourceArtwork.memoryCacheKey)"
+        if let cached = artworkCache[cacheKey] {
             return cached
         }
-        guard !artworkResolving.contains(track.trackKey) else { return nil }
-        artworkResolving.insert(track.trackKey)
+        guard
+            !artworkMisses.contains(cacheKey),
+            !artworkResolving.contains(cacheKey)
+        else { return nil }
+        artworkResolving.insert(cacheKey)
 
         let resolver = artworkResolver
         DispatchQueue.global(qos: .utility).async { [weak self] in
-            let url = resolver.coverURL(for: track)
+            let url = resolver.coverURL(for: track, sourceArtwork: sourceArtwork)
             DispatchQueue.main.async {
                 MainActor.assumeIsolated {
                     guard let self else { return }
-                    self.artworkResolving.remove(track.trackKey)
-                    self.artworkCache[track.trackKey] = url
-                    guard url != nil, self.lastTrack?.trackKey == track.trackKey else { return }
+                    self.artworkResolving.remove(cacheKey)
+                    if let url {
+                        self.artworkCache[cacheKey] = url
+                    } else {
+                        self.artworkMisses.insert(cacheKey)
+                    }
+                    guard
+                        url != nil,
+                        self.lastTrack?.trackKey == track.trackKey,
+                        self.lastArtwork?.memoryCacheKey == sourceArtwork.memoryCacheKey
+                    else { return }
                     self.lastPublishedKey = nil
-                    self.update(for: track)
+                    self.update(for: track, sourceArtwork: sourceArtwork)
                 }
             }
         }

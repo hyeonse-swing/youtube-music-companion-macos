@@ -65,6 +65,20 @@ final class DiscordPresenceControllerTests: XCTestCase {
         XCTAssertEqual(publisher.clearCount, 1)
     }
 
+    func testMissingSourceArtworkNeverStartsAnUnverifiedCoverLookup() {
+        let publisher = StubPublisher()
+        let resolver = CountingArtworkResolver()
+        let controller = DiscordPresenceController(
+            publisher: publisher,
+            artworkResolver: resolver
+        )
+
+        controller.update(for: makeTrack(), sourceArtwork: nil)
+
+        XCTAssertEqual(resolver.callCount, 0)
+        XCTAssertEqual(publisher.activities.first?.largeImage, YouTubeMusicSource.discordAssetKey)
+    }
+
     private func makeTrack() -> NowPlaying {
         NowPlaying(
             title: "Test Song",
@@ -110,5 +124,17 @@ private final class StubPublisher: PresencePublishing {
 }
 
 private struct StubArtworkResolver: ArtworkResolving {
-    func coverURL(for track: NowPlaying) -> String? { nil }
+    func coverURL(for track: NowPlaying, sourceArtwork: NowPlayingArtwork) -> String? { nil }
+}
+
+private final class CountingArtworkResolver: ArtworkResolving, @unchecked Sendable {
+    private let lock = NSLock()
+    private var calls = 0
+
+    var callCount: Int { lock.withLock { calls } }
+
+    func coverURL(for track: NowPlaying, sourceArtwork: NowPlayingArtwork) -> String? {
+        lock.withLock { calls += 1 }
+        return nil
+    }
 }

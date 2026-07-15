@@ -6,8 +6,8 @@ cd "$(dirname "$0")/.."
 
 APP="YTMusicCompanion"
 BUNDLE="${APP}.app"
-VERSION="0.4.0"
-BUILD_VERSION="4"
+VERSION="0.5.0"
+BUILD_VERSION="5"
 BUNDLE_ID="com.hyeonseswing.YTMusicCompanion"
 DISPLAY_NAME="YT Music Companion"
 DISCORD_CLIENT_ID="${DISCORD_CLIENT_ID:-}"
@@ -25,10 +25,15 @@ echo "==> Compiling (release)..."
 swift build -c release
 BIN=".build/release/${APP}"
 
+echo "==> Compiling artwork bridge..."
+./scripts/build-artwork-bridge.sh
+
 echo "==> Assembling ${BUNDLE}..."
 rm -rf "${BUNDLE}"
 mkdir -p "${BUNDLE}/Contents/MacOS" "${BUNDLE}/Contents/Resources"
 cp "${BIN}" "${BUNDLE}/Contents/MacOS/${APP}"
+cp ".build/artwork-bridge/YTMusicArtworkBridge.dylib" "${BUNDLE}/Contents/Resources/"
+cp "Support/ArtworkBridge/artwork-bridge.pl" "${BUNDLE}/Contents/Resources/"
 
 # SwiftPM emits target resources into a <pkg>_<target>.bundle next to the binary
 # (e.g. the tray icon). Bundle.module finds it under the app's Resources at runtime.

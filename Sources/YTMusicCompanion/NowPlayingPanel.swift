@@ -32,12 +32,7 @@ private struct NowPlayingPanelView: View {
     private func trackContent(source: NowPlaying, display: NowPlaying) -> some View {
         VStack(alignment: .leading, spacing: 18) {
             HStack(alignment: .top, spacing: 16) {
-                Image(systemName: "music.note")
-                    .font(.system(size: 36, weight: .medium))
-                    .foregroundStyle(.secondary)
-                    .frame(width: 72, height: 72)
-                    .background(.quaternary, in: RoundedRectangle(cornerRadius: 12))
-                    .accessibilityHidden(true)
+                artworkView(for: display)
 
                 VStack(alignment: .leading, spacing: 4) {
                     Text(display.title)
@@ -107,6 +102,28 @@ private struct NowPlayingPanelView: View {
                     }
                 }
             }
+        }
+    }
+
+    @ViewBuilder
+    private func artworkView(for track: NowPlaying) -> some View {
+        if
+            let data = model.nowPlayingArtwork?.data,
+            let image = NSImage(data: data)
+        {
+            Image(nsImage: image)
+                .resizable()
+                .scaledToFill()
+                .frame(width: 72, height: 72)
+                .clipShape(RoundedRectangle(cornerRadius: 12, style: .continuous))
+                .accessibilityLabel("Album artwork for \(track.title)")
+        } else {
+            Image(systemName: "music.note")
+                .font(.system(size: 36, weight: .medium))
+                .foregroundStyle(.secondary)
+                .frame(width: 72, height: 72)
+                .background(.quaternary, in: RoundedRectangle(cornerRadius: 12))
+                .accessibilityLabel("Album artwork unavailable")
         }
     }
 }

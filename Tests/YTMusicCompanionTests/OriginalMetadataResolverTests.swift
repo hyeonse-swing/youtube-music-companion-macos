@@ -171,6 +171,73 @@ final class OriginalMetadataResolverTests: XCTestCase {
         XCTAssertNil(metadata)
     }
 
+    func testPrefersArtistReleaseOverCompilationForSameRecording() {
+        let source = track(
+            artist: "ヨルシカ",
+            title: "ブレーメン",
+            album: "J-POP Viral Hits 2023 in China",
+            duration: 272.75
+        )
+        let japaneseResults: [[String: Any]] = [
+            [
+                "trackId": 601,
+                "trackName": "ブレーメン",
+                "artistName": "ヨルシカ",
+                "collectionName": "J-POP Viral Hits 2023 in China",
+                "collectionArtistName": "Various Artists",
+                "trackTimeMillis": 272_747,
+            ],
+            [
+                "trackId": 602,
+                "trackName": "ブレーメン",
+                "artistName": "ヨルシカ",
+                "collectionName": "幻燈",
+                "trackTimeMillis": 272_745,
+            ],
+        ]
+
+        let metadata = OriginalScriptMetadataResolver.chooseVerifiedMetadata(
+            for: source,
+            from: japaneseResults,
+            localizedResultsByTrackID: [:]
+        )
+
+        XCTAssertEqual(metadata?.album, "幻燈")
+    }
+
+    func testKeepsReportedArtistAlbumOverSeparateSingleRelease() {
+        let source = track(
+            artist: "ヨルシカ",
+            title: "パレード",
+            album: "だから僕は音楽を辞めた",
+            duration: 299.74
+        )
+        let japaneseResults: [[String: Any]] = [
+            [
+                "trackId": 701,
+                "trackName": "パレード",
+                "artistName": "ヨルシカ",
+                "collectionName": "だから僕は音楽を辞めた",
+                "trackTimeMillis": 299_740,
+            ],
+            [
+                "trackId": 702,
+                "trackName": "パレード",
+                "artistName": "ヨルシカ",
+                "collectionName": "パレード - Single",
+                "trackTimeMillis": 299_816,
+            ],
+        ]
+
+        let metadata = OriginalScriptMetadataResolver.chooseVerifiedMetadata(
+            for: source,
+            from: japaneseResults,
+            localizedResultsByTrackID: [:]
+        )
+
+        XCTAssertEqual(metadata?.album, "だから僕は音楽を辞めた")
+    }
+
     func testJapaneseStorefrontQueryUsesJapaneseResponseLanguage() throws {
         let url = try XCTUnwrap(OriginalScriptMetadataResolver.queryURL(
             for: track(artist: "Kenshi Yonezu", title: "Shunrai", duration: 288.9)

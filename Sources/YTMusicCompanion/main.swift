@@ -200,6 +200,31 @@ if CommandLine.arguments.contains("--now") {
     exit(0)
 }
 
+// Debug: fetch the same MediaRemote image bytes used by the panel, then verify a
+// public Discord-compatible URL against them. No image is written to disk.
+if CommandLine.arguments.contains("--now-artwork") {
+    guard let artwork = DefaultNowPlayingArtworkQuery().query() else {
+        print("ARTWORK → unavailable")
+        exit(1)
+    }
+    print("ARTWORK → \(artwork.width)x\(artwork.height), \(artwork.data.count) bytes")
+
+    guard let source = MediaRemoteBridge.query() else {
+        print("DISCORD → no current track")
+        exit(1)
+    }
+    let metadata = OriginalScriptMetadataResolver().resolve(for: source) ?? source.metadata
+    let display = source.applying(metadata)
+    let candidates = ITunesArtworkCatalog().candidateURLs(for: display)
+    print("CATALOG → \(candidates.count) plausible public cover(s)")
+    if let url = VerifiedArtworkResolver().coverURL(for: display, sourceArtwork: artwork) {
+        print("DISCORD → \(url)")
+        exit(0)
+    }
+    print("DISCORD → no pixel-verified public match; using app icon")
+    exit(0)
+}
+
 // Debug: resolve a localized/romanized label through the Japanese storefront.
 // `YTMusicCompanion --metadata "Artist" "Title" duration ["Album"]`
 if let index = CommandLine.arguments.firstIndex(of: "--metadata") {

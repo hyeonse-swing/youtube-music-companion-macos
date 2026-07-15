@@ -30,8 +30,10 @@ protocol TrackMetadataResolving: Sendable {
 /// Replaces a localized YouTube Music label with its original-script counterpart.
 ///
 /// Search order and a similar duration are not proof that two tracks are identical.
-/// A Japanese-storefront candidate is accepted only when the *same catalog track ID*
-/// resolves in the US storefront to the title and artist reported by MediaRemote.
+/// Romanized labels are verified by resolving the same catalog track ID in the US
+/// storefront. Labels already in Japanese can be verified directly by title, artist,
+/// and duration, which also lets us replace a compilation album with the artist's
+/// canonical release.
 final class OriginalScriptMetadataResolver: TrackMetadataResolving, @unchecked Sendable {
     private static let maximumDurationDelta: Double = 7
     private static let maximumCandidatesToVerify = 5
@@ -52,6 +54,15 @@ final class OriginalScriptMetadataResolver: TrackMetadataResolving, @unchecked S
         guard !candidates.isEmpty else {
             cache(track.metadata, for: track.trackKey)
             return track.metadata
+        }
+
+        if let directlyVerified = Self.chooseVerifiedMetadata(
+            for: track,
+            from: japaneseResults,
+            localizedResultsByTrackID: [:]
+        ) {
+            cache(directlyVerified, for: track.trackKey)
+            return directlyVerified
         }
 
         var completedLookup = false
@@ -106,14 +117,17 @@ final class OriginalScriptMetadataResolver: TrackMetadataResolving, @unchecked S
     }
 
     /// Pure selection logic used by tests and the network-backed resolver. A Japanese
-    /// result can win only when its ID has a localized result matching the actual
-    /// source title, artist, and recording length.
+    /// result can win either by directly matching an already-original source label,
+    /// or when its ID has a localized result matching the source label and duration.
     static func chooseVerifiedMetadata(
         for track: NowPlaying,
         from japaneseResults: [[String: Any]],
         localizedResultsByTrackID: [Int64: [[String: Any]]]
     ) -> TrackMetadata? {
         for candidate in rankedCandidates(for: track, from: japaneseResults) {
+            if candidateDirectlyMatchesSource(candidate, track: track) {
+                return candidate.metadata
+            }
             guard let localizedResults = localizedResultsByTrackID[candidate.trackID] else {
                 continue
             }
@@ -132,6 +146,8 @@ final class OriginalScriptMetadataResolver: TrackMetadataResolving, @unchecked S
         let durationDelta: Double
         let resultIndex: Int
         let artistMatchesDirectly: Bool
+        let albumMatchesSource: Bool
+        let isCompilation: Bool
     }
 
     private static func rankedCandidates(
@@ -152,7 +168,10 @@ final class OriginalScriptMetadataResolver: TrackMetadataResolving, @unchecked S
                 artist: artist,
                 album: (result["collectionName"] as? String) ?? track.album
             )
-            guard metadata != track.metadata, containsJapaneseScript(metadata) else { return nil }
+            // Keep an exact source candidate in the ranking. It protects an already
+            // correct artist album from being replaced by a near-identical single;
+            // compilation candidates are still demoted below canonical releases.
+            guard containsJapaneseScript(metadata) else { return nil }
 
             let durationDelta = durationDelta(for: track, result: result)
             if track.duration > 0, durationDelta > maximumDurationDelta { return nil }
@@ -162,18 +181,56 @@ final class OriginalScriptMetadataResolver: TrackMetadataResolving, @unchecked S
                 metadata: metadata,
                 durationDelta: durationDelta,
                 resultIndex: index,
-                artistMatchesDirectly: fieldsMatch(track.artist, metadata.artist)
+                artistMatchesDirectly: fieldsMatch(track.artist, metadata.artist),
+                albumMatchesSource: fieldsMatch(track.album, metadata.album),
+                isCompilation: isCompilation(result)
             )
         }
         .sorted { left, right in
             if left.artistMatchesDirectly != right.artistMatchesDirectly {
                 return left.artistMatchesDirectly
             }
+            if left.isCompilation != right.isCompilation {
+                return !left.isCompilation
+            }
+            if left.albumMatchesSource != right.albumMatchesSource {
+                return left.albumMatchesSource
+            }
             if left.durationDelta != right.durationDelta {
                 return left.durationDelta < right.durationDelta
             }
             return left.resultIndex < right.resultIndex
         }
+    }
+
+    private static func candidateDirectlyMatchesSource(
+        _ candidate: Candidate,
+        track: NowPlaying
+    ) -> Bool {
+        guard
+            fieldsMatch(track.title, candidate.metadata.title),
+            fieldsMatch(
+                LRCLIB.primaryArtist(track.artist),
+                LRCLIB.primaryArtist(candidate.metadata.artist)
+            )
+        else { return false }
+        return track.duration <= 0 || candidate.durationDelta <= maximumDurationDelta
+    }
+
+    private static func isCompilation(_ result: [String: Any]) -> Bool {
+        guard let collectionArtist = result["collectionArtistName"] as? String else {
+            return false
+        }
+        let normalized = Artwork.normalizeSearchTerm(collectionArtist)
+        if normalized == "various artists" || normalized == "various artist" {
+            return true
+        }
+        let japaneseCompilationLabels = ["ヴァリアスアーティスト", "オムニバス"]
+        if japaneseCompilationLabels.contains(where: { collectionArtist.contains($0) }) {
+            return true
+        }
+        guard let trackArtist = result["artistName"] as? String else { return false }
+        return !fieldsMatch(collectionArtist, trackArtist)
     }
 
     private static func localizedResult(_ result: [String: Any], matches track: NowPlaying) -> Bool {
