@@ -12,20 +12,31 @@ final class MenuBar: NSObject, NSMenuDelegate {
     private let statusItem: NSStatusItem
     private let model: PlayerModel
     private let appInformationWindow = AppInformationWindowController()
+    private let nowPlayingWindow: NowPlayingWindowController
+    private let resetOverlayPosition: () -> Void
 
     // Menu items we mutate from state — kept as references so we don't rebuild the
     // menu each time. The status row shows the current track; the toggle reflects
     // model.overlayEnabled.
     private let nowPlayingItem: NSMenuItem
+    private let showNowPlayingItem: NSMenuItem
     private let showOverlayItem: NSMenuItem
     private let discordItem: NSMenuItem
 
-    init(model: PlayerModel) {
+    init(model: PlayerModel, resetOverlayPosition: @escaping () -> Void) {
         self.model = model
+        self.resetOverlayPosition = resetOverlayPosition
+        nowPlayingWindow = NowPlayingWindowController(model: model)
         statusItem = NSStatusBar.system.statusItem(withLength: NSStatusItem.variableLength)
 
         nowPlayingItem = NSMenuItem(title: "No YouTube Music playing", action: nil, keyEquivalent: "")
         nowPlayingItem.isEnabled = false
+
+        showNowPlayingItem = NSMenuItem(
+            title: "Show Now Playing…",
+            action: #selector(showNowPlaying(_:)),
+            keyEquivalent: ""
+        )
 
         showOverlayItem = NSMenuItem(
             title: "Show Overlay",
@@ -67,6 +78,16 @@ final class MenuBar: NSObject, NSMenuDelegate {
         }
         discordItem.state = model.discordEnabled ? .on : .off
 
+        showNowPlayingItem.target = self
+        showNowPlayingItem.isEnabled = model.hasNowPlaying
+
+        let resetOverlayItem = NSMenuItem(
+            title: "Reset Lyrics Position",
+            action: #selector(resetLyricsPosition(_:)),
+            keyEquivalent: ""
+        )
+        resetOverlayItem.target = self
+
         let quitItem = NSMenuItem(
             title: "Quit",
             action: #selector(quit(_:)),
@@ -83,7 +104,9 @@ final class MenuBar: NSObject, NSMenuDelegate {
 
         menu.addItem(nowPlayingItem)
         menu.addItem(.separator())
+        menu.addItem(showNowPlayingItem)
         menu.addItem(showOverlayItem)
+        menu.addItem(resetOverlayItem)
         menu.addItem(discordItem)
         menu.addItem(.separator())
         menu.addItem(aboutItem)
@@ -96,12 +119,17 @@ final class MenuBar: NSObject, NSMenuDelegate {
     /// cheaper than a continuous loop, and the menu is the only place they're seen.
     func menuNeedsUpdate(_ menu: NSMenu) {
         nowPlayingItem.title = model.nowPlayingDescription
+        showNowPlayingItem.isEnabled = model.hasNowPlaying
         showOverlayItem.state = model.overlayEnabled ? .on : .off
         discordItem.state = model.discordEnabled ? .on : .off
     }
 
     func showAppInformation() {
         appInformationWindow.show()
+    }
+
+    func showNowPlayingPanel() {
+        nowPlayingWindow.show()
     }
 
     @objc private func toggleOverlay(_ sender: NSMenuItem) {
@@ -114,6 +142,14 @@ final class MenuBar: NSObject, NSMenuDelegate {
         // re-publishes the current track.
         model.discordEnabled.toggle()
         sender.state = model.discordEnabled ? .on : .off
+    }
+
+    @objc private func showNowPlaying(_ sender: NSMenuItem) {
+        showNowPlayingPanel()
+    }
+
+    @objc private func resetLyricsPosition(_ sender: NSMenuItem) {
+        resetOverlayPosition()
     }
 
     @objc private func showAbout(_ sender: NSMenuItem) {

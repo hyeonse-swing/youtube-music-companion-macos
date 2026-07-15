@@ -23,15 +23,18 @@ extension NowPlaying {
 protocol TrackMetadataResolving: Sendable {
     /// Blocking network lookup. Call from a background task.
     /// `nil` means a transient network failure; a non-nil source-equivalent value
-    /// means the lookup succeeded but found no safer original-script replacement.
+    /// means the lookup succeeded but found no verified original-script replacement.
     func resolve(for track: NowPlaying) -> TrackMetadata?
 }
 
-/// Replaces YouTube Music's localized or romanized labels with the Japanese-storefront
-/// metadata when the result can be matched confidently to the same recording.
+/// Replaces a localized YouTube Music label with its original-script counterpart.
+///
+/// Search order and a similar duration are not proof that two tracks are identical.
+/// A Japanese-storefront candidate is accepted only when the *same catalog track ID*
+/// resolves in the US storefront to the title and artist reported by MediaRemote.
 final class OriginalScriptMetadataResolver: TrackMetadataResolving, @unchecked Sendable {
     private static let maximumDurationDelta: Double = 7
-    private static let maximumUnverifiedDurationDelta: Double = 2.5
+    private static let maximumCandidatesToVerify = 5
 
     private let cacheLock = NSLock()
     private var cache: [String: TrackMetadata] = [:]
@@ -41,10 +44,37 @@ final class OriginalScriptMetadataResolver: TrackMetadataResolving, @unchecked S
             return cached
         }
 
-        guard let results = fetchResults(for: track) else { return nil }
-        let resolved = Self.chooseMetadata(for: track, from: results) ?? track.metadata
-        cacheLock.withLock { cache[track.trackKey] = resolved }
-        return resolved
+        guard let japaneseResults = fetchJSONResults(url: Self.queryURL(for: track)) else {
+            return nil
+        }
+
+        let candidates = Self.rankedCandidates(for: track, from: japaneseResults)
+        guard !candidates.isEmpty else {
+            cache(track.metadata, for: track.trackKey)
+            return track.metadata
+        }
+
+        var completedLookup = false
+        for candidate in candidates.prefix(Self.maximumCandidatesToVerify) {
+            guard let results = fetchJSONResults(url: Self.lookupURL(trackID: candidate.trackID)) else {
+                continue
+            }
+            completedLookup = true
+            if let verified = Self.chooseVerifiedMetadata(
+                for: track,
+                from: japaneseResults,
+                localizedResultsByTrackID: [candidate.trackID: results]
+            ) {
+                cache(verified, for: track.trackKey)
+                return verified
+            }
+        }
+
+        // A storefront outage is retryable. A completed lookup with no match is a
+        // definitive result and keeps the exact MediaRemote metadata unchanged.
+        guard completedLookup else { return nil }
+        cache(track.metadata, for: track.trackKey)
+        return track.metadata
     }
 
     static func queryURL(for track: NowPlaying) -> URL? {
@@ -64,16 +94,53 @@ final class OriginalScriptMetadataResolver: TrackMetadataResolving, @unchecked S
         return components?.url
     }
 
-    /// Pure selection logic kept separate from networking so false-positive handling
-    /// is covered by unit tests. Textual matches are strongest; when both title and
-    /// artist were transliterated, a top search result must instead match the exact
-    /// recording length within a narrow tolerance.
-    static func chooseMetadata(
+    static func lookupURL(trackID: Int64) -> URL? {
+        var components = URLComponents(string: "https://itunes.apple.com/lookup")
+        components?.queryItems = [
+            .init(name: "id", value: String(trackID)),
+            .init(name: "country", value: "US"),
+            .init(name: "lang", value: "en_us"),
+            .init(name: "entity", value: "song"),
+        ]
+        return components?.url
+    }
+
+    /// Pure selection logic used by tests and the network-backed resolver. A Japanese
+    /// result can win only when its ID has a localized result matching the actual
+    /// source title, artist, and recording length.
+    static func chooseVerifiedMetadata(
+        for track: NowPlaying,
+        from japaneseResults: [[String: Any]],
+        localizedResultsByTrackID: [Int64: [[String: Any]]]
+    ) -> TrackMetadata? {
+        for candidate in rankedCandidates(for: track, from: japaneseResults) {
+            guard let localizedResults = localizedResultsByTrackID[candidate.trackID] else {
+                continue
+            }
+            let isSameTrack = localizedResults.contains { localized in
+                guard trackID(in: localized) == candidate.trackID else { return false }
+                return localizedResult(localized, matches: track)
+            }
+            if isSameTrack { return candidate.metadata }
+        }
+        return nil
+    }
+
+    private struct Candidate {
+        let trackID: Int64
+        let metadata: TrackMetadata
+        let durationDelta: Double
+        let resultIndex: Int
+        let artistMatchesDirectly: Bool
+    }
+
+    private static func rankedCandidates(
         for track: NowPlaying,
         from results: [[String: Any]]
-    ) -> TrackMetadata? {
-        let candidates = results.enumerated().compactMap { index, result -> Candidate? in
+    ) -> [Candidate] {
+        results.enumerated().compactMap { index, result -> Candidate? in
             guard
+                let trackID = trackID(in: result),
                 let title = result["trackName"] as? String,
                 let artist = result["artistName"] as? String,
                 !title.isEmpty,
@@ -87,55 +154,47 @@ final class OriginalScriptMetadataResolver: TrackMetadataResolving, @unchecked S
             )
             guard metadata != track.metadata, containsJapaneseScript(metadata) else { return nil }
 
-            let resultDuration = (result["trackTimeMillis"] as? NSNumber)?.doubleValue ?? 0
-            let durationDelta = track.duration > 0 && resultDuration > 0
-                ? abs(resultDuration / 1_000 - track.duration)
-                : .infinity
-            let artistMatches = fieldsMatch(track.artist, metadata.artist)
-            let titleMatches = fieldsMatch(track.title, metadata.title)
-            let albumMatches = !track.album.isEmpty && fieldsMatch(track.album, metadata.album)
-            let hasTextualMatch = artistMatches || titleMatches || albumMatches
+            let durationDelta = durationDelta(for: track, result: result)
+            if track.duration > 0, durationDelta > maximumDurationDelta { return nil }
 
-            if track.duration > 0 {
-                guard durationDelta <= maximumDurationDelta else { return nil }
-                if !hasTextualMatch {
-                    guard index < 5, durationDelta <= maximumUnverifiedDurationDelta else {
-                        return nil
-                    }
-                }
-            } else {
-                guard hasTextualMatch, index < 5 else { return nil }
-            }
-
-            var score = Double(max(0, 10 - index))
-            if artistMatches { score += 100 }
-            if titleMatches { score += 50 }
-            if albumMatches { score += 25 }
-            if durationDelta.isFinite {
-                score += max(0, 30 - durationDelta * 5)
-            }
             return Candidate(
+                trackID: trackID,
                 metadata: metadata,
-                score: score,
                 durationDelta: durationDelta,
-                resultIndex: index
+                resultIndex: index,
+                artistMatchesDirectly: fieldsMatch(track.artist, metadata.artist)
             )
         }
-
-        return candidates.max { left, right in
-            if left.score != right.score { return left.score < right.score }
-            if left.durationDelta != right.durationDelta {
-                return left.durationDelta > right.durationDelta
+        .sorted { left, right in
+            if left.artistMatchesDirectly != right.artistMatchesDirectly {
+                return left.artistMatchesDirectly
             }
-            return left.resultIndex > right.resultIndex
-        }?.metadata
+            if left.durationDelta != right.durationDelta {
+                return left.durationDelta < right.durationDelta
+            }
+            return left.resultIndex < right.resultIndex
+        }
     }
 
-    private struct Candidate {
-        let metadata: TrackMetadata
-        let score: Double
-        let durationDelta: Double
-        let resultIndex: Int
+    private static func localizedResult(_ result: [String: Any], matches track: NowPlaying) -> Bool {
+        guard
+            let title = result["trackName"] as? String,
+            let artist = result["artistName"] as? String,
+            fieldsMatch(track.title, title),
+            fieldsMatch(LRCLIB.primaryArtist(track.artist), LRCLIB.primaryArtist(artist))
+        else { return false }
+
+        return track.duration <= 0 || durationDelta(for: track, result: result) <= maximumDurationDelta
+    }
+
+    private static func durationDelta(for track: NowPlaying, result: [String: Any]) -> Double {
+        let resultDuration = (result["trackTimeMillis"] as? NSNumber)?.doubleValue ?? 0
+        guard track.duration > 0, resultDuration > 0 else { return .infinity }
+        return abs(resultDuration / 1_000 - track.duration)
+    }
+
+    private static func trackID(in result: [String: Any]) -> Int64? {
+        (result["trackId"] as? NSNumber)?.int64Value
     }
 
     private static func containsJapaneseScript(_ metadata: TrackMetadata) -> Bool {
@@ -153,25 +212,26 @@ final class OriginalScriptMetadataResolver: TrackMetadataResolving, @unchecked S
         }
     }
 
+    /// Conservative equality for a catalog label. Parenthetical release qualifiers
+    /// are tolerated through containment, but a single shared word is never enough.
     private static func fieldsMatch(_ left: String, _ right: String) -> Bool {
         let normalizedLeft = Artwork.normalizeSearchTerm(left)
         let normalizedRight = Artwork.normalizeSearchTerm(right)
         guard !normalizedLeft.isEmpty, !normalizedRight.isEmpty else { return false }
-        if normalizedLeft.contains(normalizedRight) || normalizedRight.contains(normalizedLeft) {
-            return true
-        }
+        if normalizedLeft == normalizedRight { return true }
 
-        let leftWords = significantWords(in: normalizedLeft)
-        let rightWords = significantWords(in: normalizedRight)
-        return !leftWords.isDisjoint(with: rightWords)
+        let shorter = min(normalizedLeft.count, normalizedRight.count)
+        let longer = max(normalizedLeft.count, normalizedRight.count)
+        guard Double(shorter) / Double(longer) >= 0.6 else { return false }
+        return normalizedLeft.contains(normalizedRight) || normalizedRight.contains(normalizedLeft)
     }
 
-    private static func significantWords(in value: String) -> Set<String> {
-        Set(value.split(separator: " ").map(String.init).filter { $0.count > 2 })
+    private func cache(_ metadata: TrackMetadata, for key: String) {
+        cacheLock.withLock { cache[key] = metadata }
     }
 
-    private func fetchResults(for track: NowPlaying) -> [[String: Any]]? {
-        guard let url = Self.queryURL(for: track) else { return nil }
+    private func fetchJSONResults(url: URL?) -> [[String: Any]]? {
+        guard let url else { return nil }
 
         let process = Process()
         process.executableURL = URL(fileURLWithPath: "/usr/bin/curl")

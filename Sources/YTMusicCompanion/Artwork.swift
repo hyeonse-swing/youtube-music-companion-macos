@@ -12,27 +12,10 @@ import Foundation
 /// variant) stalls ~8s under this app's AppKit run loop, but a subprocess returns
 /// normally (see CLAUDE.md). Call `coverURL` from a background queue — it blocks.
 enum Artwork {
-    /// Resolve a cover URL for a track, trying each source in order and returning the
-    /// first hit (or nil when none match). The chain mirrors the sibling
-    /// `telegram-audio-discord` project's art assembly.
-    ///
-    /// ORDER (intentionally a single, obvious, easily-swapped sequence — the user wants
-    /// iTunes-first parity for now but may flip iTunes/YouTube later, so keep this as
-    /// one ordered list, not logic scattered across call sites):
-    ///   1. iTunes Search API   (`iTunesCoverURL`)
-    ///   2. YouTube thumbnail   (`youTubeThumbnailURL`)
-    /// To reorder, just rearrange the calls below.
-    ///
-    /// Resilient by design: every step's transient failure → nil, so the caller falls
-    /// through to the next source and ultimately shows no art rather than crashing.
+    /// Resolve a cover URL for a track. We intentionally do not scrape YouTube search:
+    /// the first video result may be unrelated to the track that is actually playing.
     static func coverURL(title: String, artist: String, album: String) -> String? {
-        if let itunes = iTunesCoverURL(title: title, artist: artist, album: album) {
-            return itunes
-        }
-        if let youtube = youTubeThumbnailURL(title: title, artist: artist) {
-            return youtube
-        }
-        return nil
+        iTunesCoverURL(title: title, artist: artist, album: album)
     }
 
     /// Resolve a 512×512 cover URL for a track via the iTunes Search API, or nil when
@@ -74,38 +57,7 @@ enum Artwork {
         return nil
     }
 
-    /// Resolve a cover via a YouTube thumbnail: scrape the YouTube results page for the
-    /// FIRST video id and build its `maxresdefault.jpg` URL. Ports the sibling project's
-    /// `searchYouTubeThumbnail` — same normalized "<title> <firstArtist>" search term as
-    /// the iTunes lookup. Returns nil on any transient failure (no body / no id).
-    ///
-    /// NOTE: `maxresdefault.jpg` does not exist for every video (some only have
-    /// `hqdefault.jpg`); the original accepts that risk and so do we — a 404 thumbnail
-    /// just renders as no image in Discord, never a crash.
-    static func youTubeThumbnailURL(title: String, artist: String) -> String? {
-        let first = LRCLIB.primaryArtist(artist)
-        let term = normalizeSearchTerm("\(title) \(first)")
-        guard !term.isEmpty,
-              let encoded = term.addingPercentEncoding(withAllowedCharacters: .urlQueryAllowed),
-              let url = URL(string: "https://www.youtube.com/results?search_query=\(encoded)"),
-              let html = curlText(url),
-              let videoID = firstYouTubeVideoID(inResultsHTML: html) else { return nil }
-        return "https://i.ytimg.com/vi/\(videoID)/maxresdefault.jpg"
-    }
-
     // MARK: - Pure helpers (testable)
-
-    /// Extract the FIRST YouTube video id from a results-page HTML string, or nil if
-    /// none is present. Pure (no networking) so it's unit-testable. Matches the same
-    /// `"videoId":"<11 chars>"` token the sibling project's regex looks for.
-    static func firstYouTubeVideoID(inResultsHTML html: String) -> String? {
-        let pattern = #""videoId":"([a-zA-Z0-9_-]{11})""#
-        guard let regex = try? NSRegularExpression(pattern: pattern) else { return nil }
-        let range = NSRange(html.startIndex..., in: html)
-        guard let match = regex.firstMatch(in: html, range: range),
-              let idRange = Range(match.range(at: 1), in: html) else { return nil }
-        return String(html[idRange])
-    }
 
     /// NFD-normalize, strip diacritics, strip punctuation, collapse whitespace,
     /// lowercase. Ports the sibling project's `normalizeSearchTerm`.
@@ -130,19 +82,39 @@ enum Artwork {
     /// matches if any >2-char word overlaps or one contains the other. Both must hold.
     static func matchesResult(artist: String, title: String,
                               resultArtist: String, resultTitle: String) -> Bool {
-        return fieldMatches(artist, resultArtist) && fieldMatches(title, resultTitle)
+        return fieldMatches(
+            LRCLIB.primaryArtist(artist),
+            LRCLIB.primaryArtist(resultArtist)
+        ) && fieldMatches(title, resultTitle)
     }
 
-    /// One field's fuzzy match: normalize both, then accept if either contains the
-    /// other or they share any word longer than 2 characters.
+    /// Conservative field match. A single shared word is not enough: that was able
+    /// to attach artwork from an unrelated search result.
     private static func fieldMatches(_ a: String, _ b: String) -> Bool {
         let na = normalizeSearchTerm(a)
         let nb = normalizeSearchTerm(b)
         if na.isEmpty || nb.isEmpty { return false }
-        if na.contains(nb) || nb.contains(na) { return true }
-        let wordsA = Set(na.split(separator: " ").map(String.init).filter { $0.count > 2 })
-        let wordsB = Set(nb.split(separator: " ").map(String.init).filter { $0.count > 2 })
-        return !wordsA.isDisjoint(with: wordsB)
+        if na == nb { return true }
+
+        let wordsA = significantWords(in: na)
+        let wordsB = significantWords(in: nb)
+        guard !wordsA.isEmpty, !wordsB.isEmpty else { return false }
+
+        let smaller = wordsA.count <= wordsB.count ? wordsA : wordsB
+        let larger = wordsA.count <= wordsB.count ? wordsB : wordsA
+        guard smaller.isSubset(of: larger) else { return false }
+        if smaller.count >= 2 { return true }
+
+        let shorterLength = min(na.count, nb.count)
+        let longerLength = max(na.count, nb.count)
+        return Double(shorterLength) / Double(longerLength) >= 0.6
+    }
+
+    private static func significantWords(in value: String) -> Set<String> {
+        let ignored = Set(["a", "an", "and", "feat", "featuring", "ft", "the"])
+        return Set(value.split(separator: " ").map(String.init).filter {
+            $0.count > 1 && !ignored.contains($0)
+        })
     }
 
     // MARK: - networking
@@ -167,31 +139,4 @@ enum Artwork {
         return try? JSONSerialization.jsonObject(with: data)
     }
 
-    /// One curl invocation returning the raw response body as text, or nil on a
-    /// curl/network error or empty body. Same subprocess style as `curlJSON`, but for
-    /// the YouTube results page we send a browser-like User-Agent and Accept-Language
-    /// (matching the sibling project) so YouTube serves the normal HTML with the
-    /// `ytInitialData` we scrape, not a stripped/consent page.
-    private static func curlText(_ url: URL?) -> String? {
-        guard let url else { return nil }
-        let proc = Process()
-        proc.executableURL = URL(fileURLWithPath: "/usr/bin/curl")
-        proc.arguments = [
-            "-s", "--max-time", "10",
-            "-H", "User-Agent: Mozilla/5.0 (Macintosh; Intel Mac OS X 10_15_7) AppleWebKit/537.36",
-            "-H", "Accept-Language: en-US,en;q=0.9",
-            url.absoluteString,
-        ]
-
-        let pipe = Pipe()
-        proc.standardOutput = pipe
-        proc.standardError = FileHandle.nullDevice
-
-        do { try proc.run() } catch { return nil }
-        let data = pipe.fileHandleForReading.readDataToEndOfFile()
-        proc.waitUntilExit()
-
-        let text = String(data: data, encoding: .utf8)
-        return (text?.isEmpty ?? true) ? nil : text
-    }
 }

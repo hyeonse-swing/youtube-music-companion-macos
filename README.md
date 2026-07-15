@@ -1,16 +1,26 @@
 # YT Music Companion
 
-A focused macOS menu-bar app for the installed YouTube Music web app. It does two things:
+A focused macOS menu-bar app for the installed YouTube Music web app. It:
 
 - Shows synchronized lyrics in a transparent, click-through overlay.
 - Publishes the current track, artwork, and progress to Discord Rich Presence.
 - Restores Japanese titles, artists, and albums when YouTube Music exposes a
   localized or romanized label.
+- Shows the current track, playback progress, and the exact value reported by
+  YouTube Music in a native **Now Playing** panel.
 
 Other players and ordinary browser tabs are intentionally ignored.
 
 Use **About YT Music Companion…** in the menu-bar menu to check the installed
 version, build number, Discord configuration status, bundle identifier, and project link.
+
+## Menu and overlay controls
+
+- **Show Now Playing…** opens the current-track panel.
+- Drag the current lyric line to move the overlay. Its position is restored at the
+  next launch and falls back automatically if a display is disconnected.
+- **Reset Lyrics Position** returns the overlay to the bottom of the primary display.
+- Scroll over the current lyric line to adjust lyric synchronization.
 
 ## Requirements
 
@@ -64,21 +74,23 @@ DISCORD_CLIENT_ID=your_application_id .build/debug/YTMusicCompanion --discord
 
 - `NowPlaying.swift`: reads macOS MediaRemote state through an `osascript` JXA bridge.
 - `YouTubeMusicSource.swift`: accepts only the installed YouTube Music web app.
-- `OriginalScriptMetadataResolver.swift`: matches romanized labels against Japanese
-  storefront metadata using artist, album, search rank, and recording duration.
+- `OriginalScriptMetadataResolver.swift`: accepts Japanese storefront metadata only
+  when the same catalog track ID resolves back to MediaRemote's title and artist.
 - `PlayerModel.swift`: coordinates playback polling, original metadata, lyrics, timing,
   and menu state.
 - `DiscordPresenceController.swift`: resolves artwork and manages successful-send deduplication and retry.
 - `DiscordRPC.swift`: dependency-free Discord local IPC client.
 - `Lyrics.swift` / `LyricsCache.swift`: LRCLIB lookup, LRC parsing, and disk cache.
 - `LyricsView.swift` / `OverlayStyle.swift`: overlay rendering and shared geometry.
+- `NowPlayingPanel.swift`: native current-track and playback-progress panel.
+- `OverlayPositionStore.swift`: persistent, display-safe overlay positioning.
 
 The MediaRemote bridge uses a private Apple framework. That makes direct, notarized distribution appropriate, but not Mac App Store distribution. macOS updates may also require compatibility fixes.
 
-Original-script resolution is deliberately conservative. If the Japanese storefront
-does not return a confident same-recording match, the app keeps YouTube Music's label
-instead of guessing. The storefront is used only as a metadata lookup; Apple Music
-playback is never monitored.
+Original-script resolution is deliberately conservative. A similar duration or search
+rank is never sufficient by itself. If the same catalog ID cannot be verified against
+MediaRemote's title and artist, the app keeps YouTube Music's label instead of guessing.
+The storefront is used only as a metadata lookup; Apple Music playback is never monitored.
 
 ## Build a release app
 

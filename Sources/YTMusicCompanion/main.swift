@@ -5,9 +5,22 @@ import SwiftUI
 /// the lyric sync offset by scrolling over the overlay.
 final class ScrollHostingView<V: View>: NSHostingView<V> {
     var onScroll: ((CGFloat) -> Void)?
+    var onDragEnded: ((NSPoint) -> Void)?
+
     override func scrollWheel(with event: NSEvent) {
         let dy = event.scrollingDeltaY != 0 ? event.scrollingDeltaY : event.deltaY
         if dy != 0 { onScroll?(dy) }
+    }
+
+    override func mouseDown(with event: NSEvent) {
+        guard let window else { return }
+        window.performDrag(with: event)
+        onDragEnded?(window.frame.origin)
+    }
+
+    override func resetCursorRects() {
+        super.resetCursorRects()
+        addCursorRect(bounds, cursor: .openHand)
     }
 }
 
@@ -21,6 +34,7 @@ final class AppDelegate: NSObject, NSApplicationDelegate {
     private var hoverTimer: Timer?
     private var activity: NSObjectProtocol?
     private var menuBar: MenuBar?
+    private let overlayPositionStore = OverlayPositionStore()
 
     func applicationDidFinishLaunching(_ notification: Notification) {
         // Prevent App Nap from throttling our polling + network while unfocused,
@@ -35,19 +49,8 @@ final class AppDelegate: NSObject, NSApplicationDelegate {
         let width = OverlayStyle.windowWidth
         let height = OverlayStyle.windowHeight
 
-        // Always the primary (menu-bar) display — screens[0] — not NSScreen.main,
-        // which would be wherever focus happened to be at launch. Use visibleFrame
-        // so the window sits just ABOVE the Dock (it occupies ~82pt at the bottom);
-        // the lyrics hug this window's bottom edge (see LyricsView).
-        let primary = NSScreen.screens.first ?? NSScreen.main
-        let bounds = primary?.frame ?? NSRect(x: 0, y: 0, width: 1440, height: 900)
-        let visible = primary?.visibleFrame ?? bounds
-        let frame = NSRect(
-            x: bounds.midX - width / 2,
-            y: visible.minY + 2,
-            width: width,
-            height: height
-        )
+        let windowSize = NSSize(width: width, height: height)
+        let frame = overlayPositionStore.initialFrame(size: windowSize)
 
         window = NSWindow(
             contentRect: frame,
@@ -69,6 +72,9 @@ final class AppDelegate: NSObject, NSApplicationDelegate {
             // gesture, not 70 ticks. Magnitude clamped per-event to stay controllable.
             let step = min(0.5, max(0.02, abs(dy) * 0.02))
             MainActor.assumeIsolated { self?.model.nudgeSync(by: dy > 0 ? step : -step) }
+        }
+        host.onDragEnded = { [weak self] origin in
+            self?.overlayPositionStore.save(origin: origin)
         }
         host.frame = NSRect(origin: .zero, size: frame.size)
         host.autoresizingMask = [.width, .height]
@@ -112,7 +118,9 @@ final class AppDelegate: NSObject, NSApplicationDelegate {
         }
 
         // Retain the menubar status item — without a strong reference it vanishes.
-        menuBar = MenuBar(model: model)
+        menuBar = MenuBar(model: model) { [weak self] in
+            self?.resetOverlayPosition()
+        }
 
         model.start()
 
@@ -124,10 +132,21 @@ final class AppDelegate: NSObject, NSApplicationDelegate {
                 self.menuBar?.showAppInformation()
             }
         }
+        if CommandLine.arguments.contains("--show-now-playing") {
+            DispatchQueue.main.async {
+                self.menuBar?.showNowPlayingPanel()
+            }
+        }
     }
 
     func applicationWillTerminate(_ notification: Notification) {
         model.stop()
+    }
+
+    private func resetOverlayPosition() {
+        overlayPositionStore.reset()
+        let size = NSSize(width: OverlayStyle.windowWidth, height: OverlayStyle.windowHeight)
+        window.setFrame(OverlayPositionStore.defaultFrame(size: size), display: true, animate: true)
     }
 
     /// Screen-space rect of the current lyric line's visible text: a centred band
@@ -234,9 +253,7 @@ if CommandLine.arguments.first(where: { $0 == "--probe" }) != nil {
     exit(0)
 }
 
-// Debug: `YTMusicCompanion --art "Artist" "Title"` → print the whole resolver chain
-// (iTunes hit, YouTube-thumbnail hit, and the resolved final URL), exit. Lets you
-// verify the iTunes → YouTube fallback order end-to-end.
+// Debug: `YTMusicCompanion --art "Artist" "Title"` → print the cover lookup result.
 if CommandLine.arguments.contains("--art") {
     let a = CommandLine.arguments
     guard a.count >= 4, let i = a.firstIndex(of: "--art"), i + 2 < a.count else {
@@ -245,7 +262,6 @@ if CommandLine.arguments.contains("--art") {
     }
     let artist = a[i + 1], title = a[i + 2]
     print("iTunes → \(Artwork.iTunesCoverURL(title: title, artist: artist, album: "") ?? "no match")")
-    print("YouTube → \(Artwork.youTubeThumbnailURL(title: title, artist: artist) ?? "no match")")
     if let url = Artwork.coverURL(title: title, artist: artist, album: "") {
         print("resolved → \(url)")
         exit(0)

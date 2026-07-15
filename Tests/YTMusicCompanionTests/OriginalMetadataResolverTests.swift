@@ -10,15 +10,22 @@ final class OriginalMetadataResolverTests: XCTestCase {
             duration: 286.7
         )
         let results: [[String: Any]] = [[
+            "trackId": 101,
             "trackName": "僕は君の事が好きだけど君は僕を別に好きじゃないみたい",
             "artistName": "back number",
             "collectionName": "シャンデリア",
             "trackTimeMillis": 286_760,
         ]]
 
-        let metadata = OriginalScriptMetadataResolver.chooseMetadata(
+        let metadata = OriginalScriptMetadataResolver.chooseVerifiedMetadata(
             for: source,
-            from: results
+            from: results,
+            localizedResultsByTrackID: [101: [localizedResult(
+                id: 101,
+                artist: source.artist,
+                title: source.title,
+                duration: source.duration
+            )]]
         )
 
         XCTAssertEqual(metadata?.title, "僕は君の事が好きだけど君は僕を別に好きじゃないみたい")
@@ -35,12 +42,14 @@ final class OriginalMetadataResolverTests: XCTestCase {
         )
         let results: [[String: Any]] = [
             [
+                "trackId": 201,
                 "trackName": "ドライフラワー",
                 "artistName": "優里",
                 "collectionName": "ドライフラワー - Single",
                 "trackTimeMillis": 285_587,
             ],
             [
+                "trackId": 202,
                 "trackName": "ドライフラワー",
                 "artistName": "優里",
                 "collectionName": "壱",
@@ -48,9 +57,23 @@ final class OriginalMetadataResolverTests: XCTestCase {
             ],
         ]
 
-        let metadata = OriginalScriptMetadataResolver.chooseMetadata(
+        let metadata = OriginalScriptMetadataResolver.chooseVerifiedMetadata(
             for: source,
-            from: results
+            from: results,
+            localizedResultsByTrackID: [
+                201: [localizedResult(
+                    id: 201,
+                    artist: source.artist,
+                    title: source.title,
+                    duration: 285.587
+                )],
+                202: [localizedResult(
+                    id: 202,
+                    artist: source.artist,
+                    title: source.title,
+                    duration: 286.360
+                )],
+            ]
         )
 
         XCTAssertEqual(metadata?.album, "壱")
@@ -64,12 +87,14 @@ final class OriginalMetadataResolverTests: XCTestCase {
         )
         let results: [[String: Any]] = [
             [
+                "trackId": 301,
                 "trackName": "僕は君の事が好きだけど君は僕を別に好きじゃないみたい (Piano Ver.)",
                 "artistName": "Piano Echoes",
                 "collectionName": "Piano Covers",
                 "trackTimeMillis": 286_700,
             ],
             [
+                "trackId": 302,
                 "trackName": "僕は君の事が好きだけど君は僕を別に好きじゃないみたい",
                 "artistName": "back number",
                 "collectionName": "シャンデリア",
@@ -77,9 +102,23 @@ final class OriginalMetadataResolverTests: XCTestCase {
             ],
         ]
 
-        let metadata = OriginalScriptMetadataResolver.chooseMetadata(
+        let metadata = OriginalScriptMetadataResolver.chooseVerifiedMetadata(
             for: source,
-            from: results
+            from: results,
+            localizedResultsByTrackID: [
+                301: [localizedResult(
+                    id: 301,
+                    artist: "Piano Echoes",
+                    title: "Piano Cover",
+                    duration: source.duration
+                )],
+                302: [localizedResult(
+                    id: 302,
+                    artist: source.artist,
+                    title: source.title,
+                    duration: source.duration
+                )],
+            ]
         )
 
         XCTAssertEqual(metadata?.artist, "back number")
@@ -89,13 +128,47 @@ final class OriginalMetadataResolverTests: XCTestCase {
     func testRejectsUnrelatedJapaneseResult() {
         let source = track(artist: "Unknown", title: "Unknown Song", duration: 180)
         let results: [[String: Any]] = [[
+            "trackId": 401,
             "trackName": "別の曲",
             "artistName": "別のアーティスト",
             "collectionName": "別のアルバム",
             "trackTimeMillis": 260_000,
         ]]
 
-        XCTAssertNil(OriginalScriptMetadataResolver.chooseMetadata(for: source, from: results))
+        XCTAssertNil(OriginalScriptMetadataResolver.chooseVerifiedMetadata(
+            for: source,
+            from: results,
+            localizedResultsByTrackID: [401: [localizedResult(
+                id: 401,
+                artist: "Different Artist",
+                title: "Different Song",
+                duration: 260
+            )]]
+        ))
+    }
+
+    func testRejectsDurationOnlySearchHitWhenCatalogIdentityDoesNotMatchSource() {
+        let source = track(artist: "Aimer", title: "Ref:rain", duration: 290)
+        let japaneseResults: [[String: Any]] = [[
+            "trackId": 501,
+            "trackName": "別の曲",
+            "artistName": "別の歌手",
+            "collectionName": "別のアルバム",
+            "trackTimeMillis": 290_000,
+        ]]
+
+        let metadata = OriginalScriptMetadataResolver.chooseVerifiedMetadata(
+            for: source,
+            from: japaneseResults,
+            localizedResultsByTrackID: [501: [localizedResult(
+                id: 501,
+                artist: "Different Artist",
+                title: "Different Song",
+                duration: 290
+            )]]
+        )
+
+        XCTAssertNil(metadata)
     }
 
     func testJapaneseStorefrontQueryUsesJapaneseResponseLanguage() throws {
@@ -108,6 +181,17 @@ final class OriginalMetadataResolverTests: XCTestCase {
         XCTAssertEqual(values["country"], "JP")
         XCTAssertEqual(values["lang"], "ja_jp")
         XCTAssertEqual(values["media"], "music")
+        XCTAssertEqual(values["entity"], "song")
+    }
+
+    func testLookupUsesSameTrackIDInEnglishUSStorefront() throws {
+        let url = try XCTUnwrap(OriginalScriptMetadataResolver.lookupURL(trackID: 1623304209))
+        let items = try XCTUnwrap(URLComponents(url: url, resolvingAgainstBaseURL: false)?.queryItems)
+        let values = Dictionary(uniqueKeysWithValues: items.map { ($0.name, $0.value ?? "") })
+
+        XCTAssertEqual(values["id"], "1623304209")
+        XCTAssertEqual(values["country"], "US")
+        XCTAssertEqual(values["lang"], "en_us")
         XCTAssertEqual(values["entity"], "song")
     }
 
@@ -145,5 +229,19 @@ final class OriginalMetadataResolverTests: XCTestCase {
             sourceBundle: "com.google.Chrome.app.cinhimbnkkaeohfgghhklpknlkffjgod",
             sourcePID: 123
         )
+    }
+
+    private func localizedResult(
+        id: Int64,
+        artist: String,
+        title: String,
+        duration: Double
+    ) -> [String: Any] {
+        [
+            "trackId": id,
+            "artistName": artist,
+            "trackName": title,
+            "trackTimeMillis": duration * 1_000,
+        ]
     }
 }

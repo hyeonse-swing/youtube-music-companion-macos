@@ -72,21 +72,10 @@ final class ArtworkTests: XCTestCase {
             resultArtist: "Adele", resultTitle: "Skyfall"))
     }
 
-    // MARK: - firstYouTubeVideoID (pure helper)
-
-    func testFirstYouTubeVideoIDExtractsKnownID() {
-        let html = #"...{"videoRenderer":{"videoId":"dQw4w9WgXcQ","thumbnail":...}}..."#
-        XCTAssertEqual(Artwork.firstYouTubeVideoID(inResultsHTML: html), "dQw4w9WgXcQ")
+    func testRejectsResultThatOnlySharesOneGenericWord() {
+        XCTAssertFalse(Artwork.matchesResult(
+            artist: "Blue Archive", title: "Madder",
+            resultArtist: "Archive Project", resultTitle: "Madder Than Ever"))
     }
 
-    func testFirstYouTubeVideoIDReturnsFirstOfMany() {
-        let html = #""videoId":"aaaaaaaaaaa" then later "videoId":"bbbbbbbbbbb""#
-        XCTAssertEqual(Artwork.firstYouTubeVideoID(inResultsHTML: html), "aaaaaaaaaaa")
-    }
-
-    func testFirstYouTubeVideoIDReturnsNilWhenAbsent() {
-        XCTAssertNil(Artwork.firstYouTubeVideoID(inResultsHTML: "<html>no ids here</html>"))
-        // A wrong-length token (10 chars) must not match the 11-char id pattern.
-        XCTAssertNil(Artwork.firstYouTubeVideoID(inResultsHTML: #""videoId":"shorttoken""#))
-    }
 }

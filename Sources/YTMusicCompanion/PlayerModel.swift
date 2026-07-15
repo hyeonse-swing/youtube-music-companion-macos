@@ -14,6 +14,9 @@ final class PlayerModel: ObservableObject {
     @Published var isHovering = false
     @Published private(set) var isPlaying = false    // overlay hides when false (paused/stopped/finished)
     @Published private(set) var isFetching = false   // metadata or lyrics fetch is in flight
+    @Published private(set) var sourceNowPlaying: NowPlaying?
+    @Published private(set) var displayNowPlaying: NowPlaying?
+    @Published private(set) var playbackElapsed: Double = 0
 
     /// User-facing switch from the menubar: when false the overlay window stays off
     /// screen even while music plays (the hover timer in AppDelegate gates on this
@@ -47,9 +50,11 @@ final class PlayerModel: ObservableObject {
 
     /// Menubar status-row text: the current track, or a "Nothing playing" idle state.
     var nowPlayingDescription: String {
-        guard isPlaying, let currentTrack else { return "No YouTube Music playing" }
+        guard let currentTrack else { return "No YouTube Music playing" }
         return currentTrack
     }
+
+    var hasNowPlaying: Bool { sourceNowPlaying != nil }
 
     var isDiscordConfigured: Bool { presenceController.isConfigured }
 
@@ -184,6 +189,7 @@ final class PlayerModel: ObservableObject {
 
         updatePlaybackClock(from: source)
         latestSourceSnapshot = source
+        sourceNowPlaying = source
 
         let sourceKey = source.trackKey
         if sourceKey != currentTrackKey {
@@ -206,6 +212,9 @@ final class PlayerModel: ObservableObject {
         currentTrack = nil
         lastNowPlaying = nil
         latestSourceSnapshot = nil
+        sourceNowPlaying = nil
+        displayNowPlaying = nil
+        playbackElapsed = 0
         activatedTrackKey = nil
         presenceController.clear()
         if let leaving = currentTrackKey {
@@ -222,6 +231,7 @@ final class PlayerModel: ObservableObject {
         sampleTimestamp = source.timestamp
         isPlaying = source.isPlaying && source.rate > 0
         rate = source.rate > 0 ? source.rate : 1
+        playbackElapsed = clampedElapsed(baseElapsed, duration: source.duration)
     }
 
     private func beginTrack(_ source: NowPlaying, sourceKey: String) {
@@ -230,6 +240,7 @@ final class PlayerModel: ObservableObject {
         currentTrackKey = sourceKey
         activatedTrackKey = nil
         lastNowPlaying = nil
+        displayNowPlaying = source
         currentTrack = trackDescription(for: source)
         syncOffset = trackOffsets[sourceKey] ?? learnedOffset
         loadedOffset = syncOffset
@@ -272,6 +283,7 @@ final class PlayerModel: ObservableObject {
 
     private func updateActiveTrack(_ track: NowPlaying, sourceKey: String) {
         lastNowPlaying = track
+        displayNowPlaying = track
         currentTrack = trackDescription(for: track)
         if discordEnabled { presenceController.update(for: track) }
 
@@ -360,6 +372,10 @@ final class PlayerModel: ObservableObject {
     }
 
     private func tick() {
+        playbackElapsed = clampedElapsed(
+            virtualElapsed,
+            duration: sourceNowPlaying?.duration ?? 0
+        )
         guard !lines.isEmpty else { return }
         let t = virtualElapsed + leadTime + syncOffset
         // Last line whose timestamp is at or before the current position.
@@ -373,5 +389,10 @@ final class PlayerModel: ObservableObject {
         }
         // Let the view's .animation(value: currentIndex) drive the motion.
         if idx != currentIndex { currentIndex = idx }
+    }
+
+    private func clampedElapsed(_ elapsed: Double, duration: Double) -> Double {
+        guard duration > 0 else { return max(0, elapsed) }
+        return min(duration, max(0, elapsed))
     }
 }
