@@ -102,7 +102,7 @@ DISCORD_CLIENT_ID=your_application_id .build/debug/YTMusicCompanion --discord
 - `OriginalScriptMetadataResolver.swift`: retains the optional storefront probe used
   by the `--metadata` development command; it is not used for displayed metadata.
 - `PlayerModel.swift`: coordinates playback polling, page metadata, lyrics, timing,
-  and menu state.
+  and menu state without publishing clock-only changes to every view.
 - `DiscordPresenceController.swift`: publishes only pixel-verified public artwork URLs
   and manages successful-send deduplication and retry.
 - `DiscordPresenceConfiguration.swift`: renders and validates the saved Discord text
@@ -111,7 +111,7 @@ DISCORD_CLIENT_ID=your_application_id .build/debug/YTMusicCompanion --discord
 - `Lyrics.swift` / `LyricsCache.swift`: LRCLIB lookup, LRC parsing, and disk cache.
 - `LyricsView.swift` / `OverlayStyle.swift`: overlay rendering and shared geometry.
 - `CompanionPreferences.swift` / `SettingsWindow.swift`: persisted user choices and
-  the native settings interface.
+  a lazily-created native settings interface whose inactive sections are not rendered.
 - `NowPlayingPanel.swift`: native current-track and playback-progress panel.
 - `OverlayPositionStore.swift`: persistent, display-safe overlay positioning.
 

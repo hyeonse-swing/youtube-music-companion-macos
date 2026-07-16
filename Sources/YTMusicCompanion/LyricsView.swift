@@ -42,22 +42,27 @@ struct LyricsView: View {
         } else {
             let fontSize = CGFloat(model.lyricsFontSize)
             let rowHeight = OverlayStyle.rowHeight(fontSize: fontSize)
+            let visibleIndices = LyricRenderWindow.indices(
+                lineCount: model.lines.count,
+                currentIndex: model.currentIndex
+            )
+            let firstVisibleIndex = visibleIndices.first ?? 0
             // -1 before the first line starts: line 0 then sits just below the
             // bottom edge and springs up into place the moment it begins.
-            let cur = model.currentIndex
             // Offset so the current line sits `currentLineFromBottom` up from the box
             // bottom; animating this translates the whole stack upward (real motion,
             // not a cross-fade). A fixed-size Color.clear sizes the box; the stack is
             // pinned to its TOP and shifted by `offset`, overflowing + clipped.
+            let relativeCurrentIndex = model.currentIndex - firstVisibleIndex
             let offset = (OverlayStyle.windowHeight - OverlayStyle.currentLineFromBottom)
-                - (CGFloat(cur) * rowHeight + rowHeight / 2)
+                - (CGFloat(relativeCurrentIndex) * rowHeight + rowHeight / 2)
 
             Color.clear
                 .frame(height: OverlayStyle.windowHeight)
                 .overlay(alignment: .top) {
                     VStack(spacing: 0) {
-                        ForEach(Array(model.lines.enumerated()), id: \.offset) { idx, line in
-                            lineView(idx: idx, line: line, fontSize: fontSize)
+                        ForEach(visibleIndices, id: \.self) { idx in
+                            lineView(idx: idx, line: model.lines[idx], fontSize: fontSize)
                                 .frame(height: rowHeight)
                         }
                     }

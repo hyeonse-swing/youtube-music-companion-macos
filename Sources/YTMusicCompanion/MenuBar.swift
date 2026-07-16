@@ -12,8 +12,8 @@ final class MenuBar: NSObject, NSMenuDelegate {
     private let statusItem: NSStatusItem
     private let model: PlayerModel
     private let appInformationWindow = AppInformationWindowController()
-    private let nowPlayingWindow: NowPlayingWindowController
-    private let settingsWindow: SettingsWindowController
+    private var nowPlayingWindow: NowPlayingWindowController?
+    private var settingsWindow: SettingsWindowController?
     private let resetOverlayPosition: () -> Void
 
     // Menu items we mutate from state — kept as references so we don't rebuild the
@@ -28,8 +28,6 @@ final class MenuBar: NSObject, NSMenuDelegate {
     init(model: PlayerModel, resetOverlayPosition: @escaping () -> Void) {
         self.model = model
         self.resetOverlayPosition = resetOverlayPosition
-        nowPlayingWindow = NowPlayingWindowController(model: model)
-        settingsWindow = SettingsWindowController(model: model)
         statusItem = NSStatusBar.system.statusItem(withLength: NSStatusItem.variableLength)
 
         nowPlayingItem = NSMenuItem(title: "No YouTube Music playing", action: nil, keyEquivalent: "")
@@ -150,11 +148,29 @@ final class MenuBar: NSObject, NSMenuDelegate {
     }
 
     func showNowPlayingPanel() {
-        nowPlayingWindow.show()
+        if let nowPlayingWindow {
+            nowPlayingWindow.show()
+            return
+        }
+
+        let controller = NowPlayingWindowController(model: model) { [weak self] in
+            self?.nowPlayingWindow = nil
+        }
+        nowPlayingWindow = controller
+        controller.show()
     }
 
     func showSettingsPanel() {
-        settingsWindow.show()
+        if let settingsWindow {
+            settingsWindow.show()
+            return
+        }
+
+        let controller = SettingsWindowController(model: model) { [weak self] in
+            self?.settingsWindow = nil
+        }
+        settingsWindow = controller
+        controller.show()
     }
 
     @objc private func toggleOverlay(_ sender: NSMenuItem) {

@@ -20,8 +20,12 @@ final class DiscordPresenceController {
     private var pendingKey: String?
     private var stateVersion = 0
 
-    private var artworkCache: [String: String] = [:]
-    private var artworkMisses: Set<String> = []
+    private var artworkCache = LRUCache<String, String>(
+        capacity: SessionCacheLimits.discordArtwork
+    )
+    private var artworkMisses = BoundedSet<String>(
+        capacity: SessionCacheLimits.negativeResults
+    )
     private var artworkResolving: Set<String> = []
 
     init(

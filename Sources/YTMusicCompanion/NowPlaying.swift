@@ -20,6 +20,20 @@ struct NowPlaying: Equatable {
     var trackKey: String { "\(artist)|\(title)|\(album)" }
 
     var isValid: Bool { !title.isEmpty && !artist.isEmpty }
+
+    /// Whether publishing this value would change anything the UI can display.
+    /// The elapsed clock and its sample timestamp advance every poll, but views
+    /// derive progress from PlayerModel's clock and do not need a full graph update.
+    func hasSamePresentation(as other: NowPlaying) -> Bool {
+        title == other.title
+            && artist == other.artist
+            && album == other.album
+            && duration == other.duration
+            && isPlaying == other.isPlaying
+            && rate == other.rate
+            && sourceBundle == other.sourceBundle
+            && sourcePID == other.sourcePID
+    }
 }
 
 /// Queries macOS now-playing state by running a JXA script through `osascript`.

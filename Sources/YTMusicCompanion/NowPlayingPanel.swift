@@ -54,20 +54,23 @@ private struct NowPlayingPanelView: View {
                 Spacer(minLength: 0)
             }
 
-            VStack(spacing: 7) {
-                ProgressView(
-                    value: min(model.playbackElapsed, max(source.duration, 1)),
-                    total: max(source.duration, 1)
-                )
-                .accessibilityLabel("Playback progress")
+            TimelineView(.periodic(from: .now, by: 1)) { _ in
+                let elapsed = model.playbackElapsed
+                VStack(spacing: 7) {
+                    ProgressView(
+                        value: min(elapsed, max(source.duration, 1)),
+                        total: max(source.duration, 1)
+                    )
+                    .accessibilityLabel("Playback progress")
 
-                HStack {
-                    Text(PlaybackTimeFormatter.string(seconds: model.playbackElapsed))
-                    Spacer()
-                    Text(PlaybackTimeFormatter.string(seconds: source.duration))
+                    HStack {
+                        Text(PlaybackTimeFormatter.string(seconds: elapsed))
+                        Spacer()
+                        Text(PlaybackTimeFormatter.string(seconds: source.duration))
+                    }
+                    .font(.caption.monospacedDigit())
+                    .foregroundStyle(.secondary)
                 }
-                .font(.caption.monospacedDigit())
-                .foregroundStyle(.secondary)
             }
 
             HStack {
@@ -108,8 +111,11 @@ private struct NowPlayingPanelView: View {
 }
 
 @MainActor
-final class NowPlayingWindowController: NSWindowController {
-    init(model: PlayerModel) {
+final class NowPlayingWindowController: NSWindowController, NSWindowDelegate {
+    private let onClose: () -> Void
+
+    init(model: PlayerModel, onClose: @escaping () -> Void = {}) {
+        self.onClose = onClose
         let panel = NSPanel(
             contentRect: NSRect(x: 0, y: 0, width: 500, height: 330),
             styleMask: [.titled, .closable],
@@ -118,6 +124,7 @@ final class NowPlayingWindowController: NSWindowController {
         )
         super.init(window: panel)
 
+        panel.delegate = self
         panel.title = "Now Playing"
         panel.isFloatingPanel = true
         panel.isReleasedWhenClosed = false
@@ -140,6 +147,11 @@ final class NowPlayingWindowController: NSWindowController {
         centerOnPrimaryDisplay()
         window?.makeKeyAndOrderFront(nil)
         window?.orderFrontRegardless()
+    }
+
+    func windowWillClose(_ notification: Notification) {
+        window?.contentView = nil
+        onClose()
     }
 
     private func centerOnPrimaryDisplay() {

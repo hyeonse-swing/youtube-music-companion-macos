@@ -16,7 +16,6 @@ final class PlayerModel: ObservableObject {
     @Published private(set) var youtubeMusicNowPlaying: NowPlaying?
     @Published private(set) var displayNowPlaying: NowPlaying?
     @Published private(set) var nowPlayingArtwork: NowPlayingArtwork?
-    @Published private(set) var playbackElapsed: Double = 0
     @Published private(set) var lyricCandidates: [LyricCandidate] = []
     @Published private(set) var selectedLyricCandidateID: String?
     @Published private(set) var isFetchingLyricCandidates = false
@@ -100,6 +99,10 @@ final class PlayerModel: ObservableObject {
 
     var discordPreviewTrack: NowPlaying? { lastDiscordNowPlaying }
 
+    var playbackElapsed: Double {
+        clampedElapsed(virtualElapsed, duration: sourceNowPlaying?.duration ?? 0)
+    }
+
     var hasExactMetadataAccess: Bool { AccessibilityPermission.isGranted }
 
     func requestExactMetadataAccess() {
@@ -132,16 +135,25 @@ final class PlayerModel: ObservableObject {
     // MediaRemote remains the stable playback identity. YouTube Music's player bar
     // supplies the exact visible labels used for display, lyrics, and Discord.
     private var latestSourceSnapshot: NowPlaying?
-    private var metadataCache: [String: TrackMetadata] = [:]
+    private var latestYouTubeMusicSnapshot: NowPlaying?
+    private var metadataCache = LRUCache<String, TrackMetadata>(
+        capacity: SessionCacheLimits.metadata
+    )
     private var resolvingMetadataKeys: Set<String> = []
-    private var metadataRetryAfter: [String: Date] = [:]
+    private var metadataRetryAfter = LRUCache<String, Date>(
+        capacity: SessionCacheLimits.retryState
+    )
     private var activatedTrackKey: String?
 
-    // Artwork is requested exactly once when a track begins. Successful bytes and
-    // definitive misses are retained for this app session, so one-second playback
-    // polling never performs image work and replaying a track is instant.
-    private var artworkCache: [String: NowPlayingArtwork] = [:]
-    private var missingArtworkKeys: Set<String> = []
+    // Artwork is requested when a track begins. Successful bytes and definitive
+    // misses live in small session caches, so one-second playback polling never
+    // performs image work while long listening sessions stay memory-bounded.
+    private var artworkCache = LRUCache<String, NowPlayingArtwork>(
+        capacity: SessionCacheLimits.artwork
+    )
+    private var missingArtworkKeys = BoundedSet<String>(
+        capacity: SessionCacheLimits.negativeResults
+    )
     private var resolvingArtworkKeys: Set<String> = []
 
     // What syncOffset was set to when the current track loaded. Lets `commit`
@@ -159,8 +171,12 @@ final class PlayerModel: ObservableObject {
     // (those never go stale); a genuine empty is kept in memory only, so a song that
     // simply has no lyrics on LRCLIB *yet* (e.g. a new release) is re-checked next
     // session instead of being cached empty forever.
-    private var lyricsCache: [String: [LyricLine]] = [:]
-    private var lyricCandidateCache: [String: [LyricCandidate]] = [:]
+    private var lyricsCache = LRUCache<String, [LyricLine]>(
+        capacity: SessionCacheLimits.lyrics
+    )
+    private var lyricCandidateCache = LRUCache<String, [LyricCandidate]>(
+        capacity: SessionCacheLimits.lyricCandidates
+    )
     private var resolvingLyricCandidateKeys: Set<String> = []
 
     // True while a MediaRemote query is in flight, so the 1s poll never stacks
@@ -240,7 +256,9 @@ final class PlayerModel: ObservableObject {
 
         updatePlaybackClock(from: source)
         latestSourceSnapshot = source
-        sourceNowPlaying = source
+        if sourceNowPlaying?.hasSamePresentation(as: source) != true {
+            sourceNowPlaying = source
+        }
 
         let sourceKey = source.trackKey
         if sourceKey != currentTrackKey {
@@ -262,16 +280,21 @@ final class PlayerModel: ObservableObject {
     }
 
     private func clearPlayback() {
+        guard
+            currentTrackKey != nil || sourceNowPlaying != nil || currentTrack != nil
+                || isPlaying || isFetching
+        else { return }
+
         isPlaying = false
         isFetching = false
         currentTrack = nil
         lastDiscordNowPlaying = nil
         latestSourceSnapshot = nil
+        latestYouTubeMusicSnapshot = nil
         sourceNowPlaying = nil
         youtubeMusicNowPlaying = nil
         displayNowPlaying = nil
         nowPlayingArtwork = nil
-        playbackElapsed = 0
         activatedTrackKey = nil
         presenceController.clear()
         if let leaving = currentTrackKey {
@@ -290,9 +313,11 @@ final class PlayerModel: ObservableObject {
         baseElapsed = source.elapsed
         baseDate = Date()
         sampleTimestamp = source.timestamp
-        isPlaying = source.isPlaying && source.rate > 0
+        let sourceIsPlaying = source.isPlaying && source.rate > 0
+        if isPlaying != sourceIsPlaying {
+            isPlaying = sourceIsPlaying
+        }
         rate = source.rate > 0 ? source.rate : 1
-        playbackElapsed = clampedElapsed(baseElapsed, duration: source.duration)
     }
 
     private func beginTrack(_ source: NowPlaying, sourceKey: String) {
@@ -301,6 +326,7 @@ final class PlayerModel: ObservableObject {
         currentTrackKey = sourceKey
         activatedTrackKey = nil
         lastDiscordNowPlaying = nil
+        latestYouTubeMusicSnapshot = nil
         youtubeMusicNowPlaying = nil
         displayNowPlaying = source
         currentTrack = trackDescription(for: source)
@@ -357,8 +383,13 @@ final class PlayerModel: ObservableObject {
         youtubeMusicTrack: NowPlaying?,
         sourceKey: String
     ) {
-        sourceNowPlaying = source
-        youtubeMusicNowPlaying = youtubeMusicTrack
+        latestYouTubeMusicSnapshot = youtubeMusicTrack
+        if sourceNowPlaying?.hasSamePresentation(as: source) != true {
+            sourceNowPlaying = source
+        }
+        if !hasSamePresentation(youtubeMusicNowPlaying, youtubeMusicTrack) {
+            youtubeMusicNowPlaying = youtubeMusicTrack
+        }
         refreshSelectedMetadataOutputs()
 
         guard activatedTrackKey != sourceKey else { return }
@@ -367,17 +398,22 @@ final class PlayerModel: ObservableObject {
     }
 
     private func refreshSelectedMetadataOutputs() {
-        guard let source = sourceNowPlaying else { return }
+        guard let source = latestSourceSnapshot else { return }
 
         let display = displayMetadataSource.select(
-            youtubeMusic: youtubeMusicNowPlaying,
+            youtubeMusic: latestYouTubeMusicSnapshot,
             macOS: source
         ) ?? source
-        displayNowPlaying = display
-        currentTrack = trackDescription(for: display)
+        if displayNowPlaying?.hasSamePresentation(as: display) != true {
+            displayNowPlaying = display
+        }
+        let description = trackDescription(for: display)
+        if currentTrack != description {
+            currentTrack = description
+        }
 
         let discordTrack = discordMetadataSource.select(
-            youtubeMusic: youtubeMusicNowPlaying,
+            youtubeMusic: latestYouTubeMusicSnapshot,
             macOS: source
         ) ?? source
         lastDiscordNowPlaying = discordTrack
@@ -387,6 +423,17 @@ final class PlayerModel: ObservableObject {
                 sourceArtwork: nowPlayingArtwork,
                 configuration: discordPresenceConfiguration
             )
+        }
+    }
+
+    private func hasSamePresentation(_ lhs: NowPlaying?, _ rhs: NowPlaying?) -> Bool {
+        switch (lhs, rhs) {
+        case (nil, nil):
+            true
+        case let (lhs?, rhs?):
+            lhs.hasSamePresentation(as: rhs)
+        default:
+            false
         }
     }
 
@@ -616,10 +663,6 @@ final class PlayerModel: ObservableObject {
     }
 
     private func tick() {
-        playbackElapsed = clampedElapsed(
-            virtualElapsed,
-            duration: sourceNowPlaying?.duration ?? 0
-        )
         guard !lines.isEmpty else { return }
         let t = virtualElapsed + leadTime + syncOffset
         // Last line whose timestamp is at or before the current position.

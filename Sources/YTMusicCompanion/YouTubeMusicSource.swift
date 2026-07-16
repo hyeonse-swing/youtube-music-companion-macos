@@ -18,7 +18,9 @@ enum YouTubeMusicSource {
     }
 
     private static let cacheLock = NSLock()
-    private static var processCache: [Int32: CacheEntry] = [:]
+    private static var processCache = LRUCache<Int32, CacheEntry>(
+        capacity: SessionCacheLimits.processIdentity
+    )
 
     static func matches(bundle: String, pid: Int32) -> Bool {
         if bundle.hasSuffix(".\(extensionID)") {

@@ -1,24 +1,46 @@
 import AppKit
 import SwiftUI
 
+private enum SettingsTab: String, CaseIterable, Identifiable {
+    case lyrics = "Lyrics"
+    case metadata = "Metadata"
+    case discord = "Discord"
+
+    var id: Self { self }
+}
+
 private struct CompanionSettingsView: View {
     @ObservedObject var model: PlayerModel
+    @State private var selectedTab = SettingsTab.lyrics
 
     var body: some View {
-        TabView {
-            LyricsSettingsView(model: model)
-                .tabItem { Label("Lyrics", systemImage: "captions.bubble") }
-
-            MetadataSettingsView(model: model)
-                .tabItem { Label("Metadata", systemImage: "list.bullet.rectangle") }
-
-            DiscordSettingsView(model: model)
-                .tabItem {
-                    Label("Discord", systemImage: "antenna.radiowaves.left.and.right")
+        VStack(spacing: 12) {
+            Picker("Settings section", selection: $selectedTab) {
+                ForEach(SettingsTab.allCases) { tab in
+                    Text(tab.rawValue).tag(tab)
                 }
+            }
+            .labelsHidden()
+            .pickerStyle(.segmented)
+            .frame(width: 310)
+
+            selectedContent
+                .frame(maxWidth: .infinity, maxHeight: .infinity)
         }
         .padding(20)
         .frame(minWidth: 640, idealWidth: 680, minHeight: 600, idealHeight: 650)
+    }
+
+    @ViewBuilder
+    private var selectedContent: some View {
+        switch selectedTab {
+        case .lyrics:
+            LyricsSettingsView(model: model)
+        case .metadata:
+            MetadataSettingsView(model: model)
+        case .discord:
+            DiscordSettingsView(model: model)
+        }
     }
 }
 
@@ -427,8 +449,11 @@ private struct MetadataPreviewRow: View {
 }
 
 @MainActor
-final class SettingsWindowController: NSWindowController {
-    init(model: PlayerModel) {
+final class SettingsWindowController: NSWindowController, NSWindowDelegate {
+    private let onClose: () -> Void
+
+    init(model: PlayerModel, onClose: @escaping () -> Void = {}) {
+        self.onClose = onClose
         let panel = NSPanel(
             contentRect: NSRect(x: 0, y: 0, width: 680, height: 650),
             styleMask: [.titled, .closable, .resizable],
@@ -437,6 +462,7 @@ final class SettingsWindowController: NSWindowController {
         )
         super.init(window: panel)
 
+        panel.delegate = self
         panel.title = "Settings"
         panel.isFloatingPanel = true
         panel.isReleasedWhenClosed = false
@@ -458,5 +484,10 @@ final class SettingsWindowController: NSWindowController {
         if window?.isVisible != true { window?.center() }
         window?.makeKeyAndOrderFront(nil)
         window?.orderFrontRegardless()
+    }
+
+    func windowWillClose(_ notification: Notification) {
+        window?.contentView = nil
+        onClose()
     }
 }
