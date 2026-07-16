@@ -25,6 +25,37 @@ final class CompanionPreferencesTests: XCTestCase {
         XCTAssertEqual(preferences.lyricsFontSize, 30)
         XCTAssertEqual(preferences.displayMetadataSource, .youtubeMusic)
         XCTAssertEqual(preferences.discordMetadataSource, .youtubeMusic)
+        XCTAssertEqual(preferences.discordPresenceConfiguration, .standard)
+    }
+
+    func testDiscordPresenceCustomizationPersists() {
+        let customized = DiscordPresenceConfiguration(
+            detailsTemplate: "Listening to {title}",
+            stateTemplate: "by {artist}",
+            imageTextTemplate: "from {album}",
+            showsPlaybackTime: false
+        )
+        var preferences = CompanionPreferences(defaults: defaults)
+        preferences.discordPresenceConfiguration = customized
+
+        preferences = CompanionPreferences(defaults: defaults)
+
+        XCTAssertEqual(preferences.discordPresenceConfiguration, customized)
+    }
+
+    func testResetDiscordPresenceCustomizationReturnsToOriginalDefaults() {
+        var preferences = CompanionPreferences(defaults: defaults)
+        preferences.discordPresenceConfiguration = DiscordPresenceConfiguration(
+            detailsTemplate: "Custom {title}",
+            stateTemplate: "Custom {artist}",
+            imageTextTemplate: "Custom {album}",
+            showsPlaybackTime: false
+        )
+
+        preferences.resetDiscordPresenceConfiguration()
+        preferences = CompanionPreferences(defaults: defaults)
+
+        XCTAssertEqual(preferences.discordPresenceConfiguration, .standard)
     }
 
     func testLyricsFontSizeIsClampedAndPersisted() {

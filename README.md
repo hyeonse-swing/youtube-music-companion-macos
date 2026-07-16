@@ -10,6 +10,8 @@ A focused macOS menu-bar app for the installed YouTube Music web app. It:
 - Shows the current track and playback progress in a native **Now Playing** panel.
 - Lets you choose lyric versions, lyric size, timing resets, and separate metadata
   sources for the app and Discord from a native **Settings** panel.
+- Lets you customize Discord's top line, second line, cover description, and
+  playback-time visibility with track metadata templates.
 
 Other players and ordinary browser tabs are intentionally ignored.
 
@@ -28,6 +30,8 @@ version, build number, Discord configuration status, bundle identifier, and proj
 - **Settings…** (`⌘,`) changes lyric size, resets the current or all timing
   adjustments, selects an LRCLIB result per song, and independently chooses
   YouTube Music screen metadata or macOS playback metadata for the app and Discord.
+- The **Discord** settings tab supports `{title}`, `{artist}`, and `{album}` tokens,
+  shows a live preview, and provides **Revert Changes** and **Reset to Defaults**.
 
 ## Requirements
 
@@ -101,6 +105,8 @@ DISCORD_CLIENT_ID=your_application_id .build/debug/YTMusicCompanion --discord
   and menu state.
 - `DiscordPresenceController.swift`: publishes only pixel-verified public artwork URLs
   and manages successful-send deduplication and retry.
+- `DiscordPresenceConfiguration.swift`: renders and validates the saved Discord text
+  templates before they reach the Rich Presence transport.
 - `DiscordRPC.swift`: dependency-free Discord local IPC client.
 - `Lyrics.swift` / `LyricsCache.swift`: LRCLIB lookup, LRC parsing, and disk cache.
 - `LyricsView.swift` / `OverlayStyle.swift`: overlay rendering and shared geometry.

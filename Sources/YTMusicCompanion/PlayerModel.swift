@@ -40,7 +40,8 @@ final class PlayerModel: ObservableObject {
                 if let lastDiscordNowPlaying {
                     presenceController.update(
                         for: lastDiscordNowPlaying,
-                        sourceArtwork: nowPlayingArtwork
+                        sourceArtwork: nowPlayingArtwork,
+                        configuration: discordPresenceConfiguration
                     )
                 }
             } else {
@@ -75,6 +76,8 @@ final class PlayerModel: ObservableObject {
         }
     }
 
+    @Published private(set) var discordPresenceConfiguration: DiscordPresenceConfiguration
+
     private let defaults: UserDefaults
     private let presenceController: DiscordPresenceController
     private let metadataResolver: TrackMetadataResolving
@@ -94,6 +97,8 @@ final class PlayerModel: ObservableObject {
     var hasNowPlaying: Bool { sourceNowPlaying != nil }
 
     var isDiscordConfigured: Bool { presenceController.isConfigured }
+
+    var discordPreviewTrack: NowPlaying? { lastDiscordNowPlaying }
 
     var hasExactMetadataAccess: Bool { AccessibilityPermission.isGranted }
 
@@ -182,6 +187,7 @@ final class PlayerModel: ObservableObject {
         lyricsFontSize = preferences.lyricsFontSize
         displayMetadataSource = preferences.displayMetadataSource
         discordMetadataSource = preferences.discordMetadataSource
+        discordPresenceConfiguration = preferences.discordPresenceConfiguration
         syncOffset = preferences.learnedTimingOffset
     }
 
@@ -376,7 +382,11 @@ final class PlayerModel: ObservableObject {
         ) ?? source
         lastDiscordNowPlaying = discordTrack
         if discordEnabled {
-            presenceController.update(for: discordTrack, sourceArtwork: nowPlayingArtwork)
+            presenceController.update(
+                for: discordTrack,
+                sourceArtwork: nowPlayingArtwork,
+                configuration: discordPresenceConfiguration
+            )
         }
     }
 
@@ -409,7 +419,11 @@ final class PlayerModel: ObservableObject {
             artworkCache[sourceKey] = artwork
             nowPlayingArtwork = artwork
             if discordEnabled, let lastDiscordNowPlaying {
-                presenceController.update(for: lastDiscordNowPlaying, sourceArtwork: artwork)
+                presenceController.update(
+                    for: lastDiscordNowPlaying,
+                    sourceArtwork: artwork,
+                    configuration: discordPresenceConfiguration
+                )
             }
         } else {
             missingArtworkKeys.insert(sourceKey)
@@ -555,6 +569,29 @@ final class PlayerModel: ObservableObject {
 
     func resetLyricsFontSize() {
         lyricsFontSize = CompanionPreferences.defaultLyricsFontSize
+    }
+
+    func applyDiscordPresenceConfiguration(_ configuration: DiscordPresenceConfiguration) {
+        guard configuration != discordPresenceConfiguration else { return }
+        discordPresenceConfiguration = configuration
+        preferences.discordPresenceConfiguration = configuration
+        republishDiscordPresenceIfNeeded()
+    }
+
+    func resetDiscordPresenceConfiguration() {
+        let changed = discordPresenceConfiguration != .standard
+        preferences.resetDiscordPresenceConfiguration()
+        discordPresenceConfiguration = .standard
+        if changed { republishDiscordPresenceIfNeeded() }
+    }
+
+    private func republishDiscordPresenceIfNeeded() {
+        guard discordEnabled, let lastDiscordNowPlaying else { return }
+        presenceController.update(
+            for: lastDiscordNowPlaying,
+            sourceArtwork: nowPlayingArtwork,
+            configuration: discordPresenceConfiguration
+        )
     }
 
     /// Persist a just-finished track's correction. The offset is saved per-song

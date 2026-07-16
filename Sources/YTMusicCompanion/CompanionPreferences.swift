@@ -45,6 +45,10 @@ struct CompanionPreferences {
     private static let trackOffsetsKey = "syncTrackOffsets"
     private static let learnedOffsetKey = "syncLearnedOffset"
     private static let lyricSelectionsKey = "lyricsCandidateSelections"
+    private static let discordDetailsTemplateKey = "discordDetailsTemplate"
+    private static let discordStateTemplateKey = "discordStateTemplate"
+    private static let discordImageTextTemplateKey = "discordImageTextTemplate"
+    private static let discordShowsPlaybackTimeKey = "discordShowsPlaybackTime"
 
     private let defaults: UserDefaults
     private var trackOffsets: [String: Double]
@@ -69,6 +73,27 @@ struct CompanionPreferences {
         }
     }
 
+    var discordPresenceConfiguration: DiscordPresenceConfiguration {
+        didSet {
+            defaults.set(
+                discordPresenceConfiguration.detailsTemplate,
+                forKey: Self.discordDetailsTemplateKey
+            )
+            defaults.set(
+                discordPresenceConfiguration.stateTemplate,
+                forKey: Self.discordStateTemplateKey
+            )
+            defaults.set(
+                discordPresenceConfiguration.imageTextTemplate,
+                forKey: Self.discordImageTextTemplateKey
+            )
+            defaults.set(
+                discordPresenceConfiguration.showsPlaybackTime,
+                forKey: Self.discordShowsPlaybackTimeKey
+            )
+        }
+    }
+
     private(set) var learnedTimingOffset: Double
 
     init(defaults: UserDefaults = .standard) {
@@ -83,6 +108,17 @@ struct CompanionPreferences {
         discordMetadataSource = MetadataSourcePreference(
             rawValue: defaults.string(forKey: Self.discordMetadataSourceKey) ?? ""
         ) ?? .youtubeMusic
+        let standardPresence = DiscordPresenceConfiguration.standard
+        discordPresenceConfiguration = DiscordPresenceConfiguration(
+            detailsTemplate: defaults.string(forKey: Self.discordDetailsTemplateKey)
+                ?? standardPresence.detailsTemplate,
+            stateTemplate: defaults.string(forKey: Self.discordStateTemplateKey)
+                ?? standardPresence.stateTemplate,
+            imageTextTemplate: defaults.string(forKey: Self.discordImageTextTemplateKey)
+                ?? standardPresence.imageTextTemplate,
+            showsPlaybackTime: defaults.object(forKey: Self.discordShowsPlaybackTimeKey) as? Bool
+                ?? standardPresence.showsPlaybackTime
+        )
         learnedTimingOffset = defaults.double(forKey: Self.learnedOffsetKey)
         trackOffsets = (defaults.dictionary(forKey: Self.trackOffsetsKey) ?? [:])
             .compactMapValues { ($0 as? NSNumber)?.doubleValue }
@@ -123,6 +159,16 @@ struct CompanionPreferences {
     mutating func selectLyricCandidate(_ candidateID: String, for trackKey: String) {
         lyricSelections[trackKey] = candidateID
         defaults.set(lyricSelections, forKey: Self.lyricSelectionsKey)
+    }
+
+    mutating func resetDiscordPresenceConfiguration() {
+        discordPresenceConfiguration = .standard
+        [
+            Self.discordDetailsTemplateKey,
+            Self.discordStateTemplateKey,
+            Self.discordImageTextTemplateKey,
+            Self.discordShowsPlaybackTimeKey,
+        ].forEach(defaults.removeObject(forKey:))
     }
 
     private static func clampLyricsFontSize(_ value: Double) -> Double {

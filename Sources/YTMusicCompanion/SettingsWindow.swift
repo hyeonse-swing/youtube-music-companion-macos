@@ -11,9 +11,14 @@ private struct CompanionSettingsView: View {
 
             MetadataSettingsView(model: model)
                 .tabItem { Label("Metadata", systemImage: "list.bullet.rectangle") }
+
+            DiscordSettingsView(model: model)
+                .tabItem {
+                    Label("Discord", systemImage: "antenna.radiowaves.left.and.right")
+                }
         }
         .padding(20)
-        .frame(minWidth: 640, idealWidth: 680, minHeight: 500, idealHeight: 560)
+        .frame(minWidth: 640, idealWidth: 680, minHeight: 600, idealHeight: 650)
     }
 }
 
@@ -185,15 +190,8 @@ private struct MetadataSettingsView: View {
     var body: some View {
         Form {
             Section("App and Now Playing Panel") {
-                metadataPicker(selection: $model.displayMetadataSource)
+                MetadataSourcePicker(selection: $model.displayMetadataSource)
                 Text(model.displayMetadataSource.helpText)
-                    .font(.caption)
-                    .foregroundStyle(.secondary)
-            }
-
-            Section("Discord Rich Presence") {
-                metadataPicker(selection: $model.discordMetadataSource)
-                Text(model.discordMetadataSource.helpText)
                     .font(.caption)
                     .foregroundStyle(.secondary)
             }
@@ -237,16 +235,171 @@ private struct MetadataSettingsView: View {
         }
         .formStyle(.grouped)
     }
+}
 
-    private func metadataPicker(
-        selection: Binding<MetadataSourcePreference>
-    ) -> some View {
-        Picker("Metadata source", selection: selection) {
+private struct DiscordSettingsView: View {
+    @ObservedObject var model: PlayerModel
+    @State private var draft: DiscordPresenceConfiguration
+
+    init(model: PlayerModel) {
+        self.model = model
+        _draft = State(initialValue: model.discordPresenceConfiguration)
+    }
+
+    var body: some View {
+        Form {
+            Section("Status") {
+                Toggle("Enable Discord Rich Presence", isOn: $model.discordEnabled)
+                    .disabled(!model.isDiscordConfigured)
+                if !model.isDiscordConfigured {
+                    Label(
+                        "Discord is not configured in this build.",
+                        systemImage: "exclamationmark.triangle"
+                    )
+                    .foregroundStyle(.secondary)
+                }
+            }
+
+            Section("Metadata Source") {
+                MetadataSourcePicker(selection: $model.discordMetadataSource)
+                Text(model.discordMetadataSource.helpText)
+                    .font(.caption)
+                    .foregroundStyle(.secondary)
+            }
+
+            Section("Custom Text") {
+                TextField("Top line", text: $draft.detailsTemplate)
+                    .accessibilityHint("Supports title, artist, and album tokens")
+                TextField("Second line", text: $draft.stateTemplate)
+                    .accessibilityHint("Supports title, artist, and album tokens")
+                TextField("Cover description", text: $draft.imageTextTemplate)
+                    .accessibilityHint("Supports title, artist, and album tokens")
+                Toggle("Show playback time", isOn: $draft.showsPlaybackTime)
+
+                VStack(alignment: .leading, spacing: 4) {
+                    Text("Available tokens: " + DiscordPresenceConfiguration.supportedTokens.joined(separator: "  "))
+                        .font(.caption.monospaced())
+                    Text("Blank fields automatically use the original title, artist, or album value.")
+                        .font(.caption)
+                }
+                .foregroundStyle(.secondary)
+
+                HStack {
+                    Spacer()
+                    Button("Revert Changes") {
+                        draft = model.discordPresenceConfiguration
+                    }
+                    .disabled(!hasUnsavedChanges)
+
+                    Button("Reset to Defaults") {
+                        draft = .standard
+                        model.resetDiscordPresenceConfiguration()
+                    }
+                    .disabled(!hasCustomization)
+
+                    Button("Apply") {
+                        model.applyDiscordPresenceConfiguration(draft)
+                    }
+                    .keyboardShortcut(.defaultAction)
+                    .disabled(!hasUnsavedChanges)
+                }
+            }
+
+            Section("Preview") {
+                DiscordPresencePreview(
+                    configuration: draft,
+                    track: model.discordPreviewTrack
+                )
+            }
+        }
+        .formStyle(.grouped)
+        .onChange(of: model.discordPresenceConfiguration) { oldValue, newValue in
+            if draft == oldValue { draft = newValue }
+        }
+    }
+
+    private var hasUnsavedChanges: Bool {
+        draft != model.discordPresenceConfiguration
+    }
+
+    private var hasCustomization: Bool {
+        draft != .standard || model.discordPresenceConfiguration != .standard
+    }
+}
+
+private struct MetadataSourcePicker: View {
+    @Binding var selection: MetadataSourcePreference
+
+    var body: some View {
+        Picker("Metadata source", selection: $selection) {
             ForEach(MetadataSourcePreference.allCases) { source in
                 Text(source.displayName).tag(source)
             }
         }
         .pickerStyle(.radioGroup)
+    }
+}
+
+private struct DiscordPresencePreview: View {
+    let configuration: DiscordPresenceConfiguration
+    let track: NowPlaying?
+
+    private static let exampleTrack = NowPlaying(
+        title: "Song Title",
+        artist: "Artist",
+        album: "Album",
+        duration: 180,
+        elapsed: 30,
+        timestamp: 0,
+        isPlaying: true,
+        rate: 1,
+        sourceBundle: "",
+        sourcePID: 0
+    )
+
+    var body: some View {
+        let previewTrack = track ?? Self.exampleTrack
+        let content = configuration.content(for: previewTrack)
+
+        HStack(spacing: 14) {
+            Image(systemName: "music.note")
+                .font(.system(size: 28, weight: .medium))
+                .foregroundStyle(.secondary)
+                .frame(width: 58, height: 58)
+                .background(.quaternary, in: RoundedRectangle(cornerRadius: 10))
+                .accessibilityHidden(true)
+
+            VStack(alignment: .leading, spacing: 3) {
+                Text(content.details)
+                    .font(.headline)
+                    .lineLimit(1)
+                Text(content.state)
+                    .foregroundStyle(.secondary)
+                    .lineLimit(1)
+                Text(content.imageText)
+                    .font(.caption)
+                    .foregroundStyle(.tertiary)
+                    .lineLimit(1)
+            }
+
+            Spacer(minLength: 12)
+
+            Label(
+                configuration.showsPlaybackTime ? "Time shown" : "Time hidden",
+                systemImage: configuration.showsPlaybackTime ? "clock" : "clock.badge.xmark"
+            )
+            .font(.caption)
+            .foregroundStyle(.secondary)
+        }
+        .padding(.vertical, 8)
+        .accessibilityElement(children: .combine)
+        .accessibilityLabel(accessibilityDescription(content: content))
+    }
+
+    private func accessibilityDescription(content: DiscordPresenceContent) -> String {
+        let kind = track == nil ? "Example Discord preview" : "Current Discord preview"
+        let time = configuration.showsPlaybackTime ? "playback time shown" : "playback time hidden"
+        return "\(kind), \(content.details), \(content.state), \(content.imageText), \(time)"
     }
 }
 
@@ -277,7 +430,7 @@ private struct MetadataPreviewRow: View {
 final class SettingsWindowController: NSWindowController {
     init(model: PlayerModel) {
         let panel = NSPanel(
-            contentRect: NSRect(x: 0, y: 0, width: 680, height: 560),
+            contentRect: NSRect(x: 0, y: 0, width: 680, height: 650),
             styleMask: [.titled, .closable, .resizable],
             backing: .buffered,
             defer: false
@@ -285,11 +438,13 @@ final class SettingsWindowController: NSWindowController {
         super.init(window: panel)
 
         panel.title = "Settings"
+        panel.isFloatingPanel = true
         panel.isReleasedWhenClosed = false
+        panel.level = .floating
         panel.animationBehavior = .documentWindow
         panel.collectionBehavior = [.moveToActiveSpace, .fullScreenAuxiliary]
         panel.hidesOnDeactivate = false
-        panel.minSize = NSSize(width: 640, height: 500)
+        panel.minSize = NSSize(width: 640, height: 600)
         panel.contentView = NSHostingView(rootView: CompanionSettingsView(model: model))
     }
 

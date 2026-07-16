@@ -79,6 +79,47 @@ final class DiscordPresenceControllerTests: XCTestCase {
         XCTAssertEqual(publisher.activities.first?.largeImage, YouTubeMusicSource.discordAssetKey)
     }
 
+    func testCustomTextAndHiddenPlaybackTimeArePublished() {
+        let publisher = StubPublisher()
+        let controller = DiscordPresenceController(
+            publisher: publisher,
+            artworkResolver: StubArtworkResolver()
+        )
+        let configuration = DiscordPresenceConfiguration(
+            detailsTemplate: "Listening: {title}",
+            stateTemplate: "{artist} — {album}",
+            imageTextTemplate: "Cover: {album}",
+            showsPlaybackTime: false
+        )
+
+        controller.update(for: makeTrack(), configuration: configuration)
+
+        XCTAssertEqual(publisher.activities.first?.details, "Listening: Test Song")
+        XCTAssertEqual(publisher.activities.first?.state, "Test Artist — Test Album")
+        XCTAssertEqual(publisher.activities.first?.largeImageText, "Cover: Test Album")
+        XCTAssertNil(publisher.activities.first?.start)
+        XCTAssertNil(publisher.activities.first?.end)
+    }
+
+    func testChangingCustomizationRepublishesTheSameTrack() {
+        let publisher = StubPublisher()
+        let controller = DiscordPresenceController(
+            publisher: publisher,
+            artworkResolver: StubArtworkResolver()
+        )
+        let track = makeTrack()
+
+        controller.update(for: track, configuration: .standard)
+        publisher.completeNext(with: true)
+        drainMainQueue()
+        var customized = DiscordPresenceConfiguration.standard
+        customized.detailsTemplate = "🎵 {title}"
+        controller.update(for: track, configuration: customized)
+
+        XCTAssertEqual(publisher.activities.count, 2)
+        XCTAssertEqual(publisher.activities.last?.details, "🎵 Test Song")
+    }
+
     private func makeTrack() -> NowPlaying {
         NowPlaying(
             title: "Test Song",

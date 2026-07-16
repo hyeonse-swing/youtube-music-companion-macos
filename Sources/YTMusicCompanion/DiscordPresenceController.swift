@@ -14,6 +14,7 @@ final class DiscordPresenceController {
 
     private var lastTrack: NowPlaying?
     private var lastArtwork: NowPlayingArtwork?
+    private var lastConfiguration = DiscordPresenceConfiguration.standard
     private var lastPublishedKey: String?
     private var lastPublishedStart: Double = 0
     private var pendingKey: String?
@@ -33,9 +34,14 @@ final class DiscordPresenceController {
 
     var isConfigured: Bool { publisher.isConfigured }
 
-    func update(for track: NowPlaying, sourceArtwork: NowPlayingArtwork? = nil) {
+    func update(
+        for track: NowPlaying,
+        sourceArtwork: NowPlayingArtwork? = nil,
+        configuration: DiscordPresenceConfiguration = .standard
+    ) {
         lastTrack = track
         lastArtwork = sourceArtwork
+        lastConfiguration = configuration
         guard track.isPlaying, track.rate > 0 else {
             clear()
             return
@@ -46,7 +52,12 @@ final class DiscordPresenceController {
             : Date().timeIntervalSince1970
         let startEpoch = reference - track.elapsed
         let artworkURL = resolvedArtwork(for: track, sourceArtwork: sourceArtwork)
-        let publicationKey = "\(track.trackKey)|\(track.duration > 0)|\(artworkURL ?? "fallback")"
+        let publicationKey = [
+            track.trackKey,
+            track.duration > 0 ? "duration" : "no-duration",
+            artworkURL ?? "fallback",
+            configuration.publicationKey,
+        ].joined(separator: "|")
         let seeked = track.timestamp > 0 && abs(startEpoch - lastPublishedStart) > 3
 
         guard pendingKey != publicationKey else { return }
@@ -55,7 +66,8 @@ final class DiscordPresenceController {
         let activity = makeActivity(
             for: track,
             startEpoch: startEpoch,
-            artworkURL: artworkURL
+            artworkURL: artworkURL,
+            configuration: configuration
         )
         pendingKey = publicationKey
         let version = stateVersion
@@ -80,6 +92,7 @@ final class DiscordPresenceController {
         stateVersion += 1
         lastTrack = nil
         lastArtwork = nil
+        lastConfiguration = .standard
         pendingKey = nil
         lastPublishedKey = nil
         lastPublishedStart = 0
@@ -95,25 +108,29 @@ final class DiscordPresenceController {
     private func makeActivity(
         for track: NowPlaying,
         startEpoch: Double,
-        artworkURL: String?
+        artworkURL: String?,
+        configuration: DiscordPresenceConfiguration
     ) -> PresenceActivity {
-        let end = track.duration > 0
+        let end = configuration.showsPlaybackTime && track.duration > 0
             ? Date(timeIntervalSince1970: startEpoch + track.duration)
+            : nil
+        let start = configuration.showsPlaybackTime
+            ? Date(timeIntervalSince1970: startEpoch)
             : nil
         let title = track.artist.isEmpty
             ? track.title
             : "\(track.title) - \(track.artist)"
         let image = artworkURL ?? YouTubeMusicSource.discordAssetKey
-        let imageText = track.album.isEmpty ? track.title : track.album
+        let content = configuration.content(for: track)
 
         return PresenceActivity(
             name: title,
-            details: track.title,
-            state: track.artist,
-            start: Date(timeIntervalSince1970: startEpoch),
+            details: content.details,
+            state: content.state,
+            start: start,
             end: end,
             largeImage: image,
-            largeImageText: imageText,
+            largeImageText: content.imageText,
             smallImage: YouTubeMusicSource.discordAssetKey,
             smallImageText: YouTubeMusicSource.displayName
         )
@@ -152,7 +169,11 @@ final class DiscordPresenceController {
                         self.lastArtwork?.memoryCacheKey == sourceArtwork.memoryCacheKey
                     else { return }
                     self.lastPublishedKey = nil
-                    self.update(for: track, sourceArtwork: sourceArtwork)
+                    self.update(
+                        for: track,
+                        sourceArtwork: sourceArtwork,
+                        configuration: self.lastConfiguration
+                    )
                 }
             }
         }
