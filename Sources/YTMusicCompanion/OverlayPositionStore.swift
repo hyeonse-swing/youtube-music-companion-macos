@@ -72,7 +72,10 @@ struct OverlayPositionStore {
         let frame = NSRect(origin: origin, size: size)
         return visibleFrames.contains { visibleFrame in
             let intersection = frame.intersection(visibleFrame)
-            return intersection.width >= 120 && intersection.height >= OverlayStyle.rowHeight
+            return intersection.width >= 120
+                && intersection.height >= OverlayStyle.rowHeight(
+                    fontSize: OverlayStyle.defaultFontSize
+                )
         }
     }
 }

@@ -24,6 +24,63 @@ struct LyricLine: Equatable, Codable {
     let text: String   // may be empty (instrumental break → shown as ♪)
 }
 
+enum LyricScript: String, Equatable {
+    case japanese
+    case korean
+    case cjk
+    case latin
+    case other
+
+    var displayName: String {
+        switch self {
+        case .japanese: "Japanese"
+        case .korean: "Korean"
+        case .cjk: "CJK"
+        case .latin: "Latin / Romanized"
+        case .other: "Other"
+        }
+    }
+}
+
+/// One selectable synced-lyrics result from LRCLIB. Metadata is kept alongside
+/// the lines so the settings panel can show why two candidates differ.
+struct LyricCandidate: Identifiable, Equatable {
+    let id: String
+    let title: String
+    let artist: String
+    let album: String
+    let duration: Double
+    let lines: [LyricLine]
+
+    var script: LyricScript {
+        var hasJapanese = false
+        var hasHangul = false
+        var hasCJK = false
+        var hasLatin = false
+
+        for scalar in lines.lazy.flatMap(\.text.unicodeScalars) {
+            let value = scalar.value
+            hasJapanese = hasJapanese
+                || (0x3040...0x30FF).contains(value)
+                || (0x31F0...0x31FF).contains(value)
+            hasHangul = hasHangul
+                || (0xAC00...0xD7A3).contains(value)
+                || (0x1100...0x11FF).contains(value)
+                || (0x3130...0x318F).contains(value)
+            hasCJK = hasCJK || (0x3400...0x9FFF).contains(value)
+            hasLatin = hasLatin
+                || (0x0041...0x005A).contains(value)
+                || (0x0061...0x007A).contains(value)
+        }
+
+        if hasJapanese { return .japanese }
+        if hasHangul { return .korean }
+        if hasCJK { return .cjk }
+        if hasLatin { return .latin }
+        return .other
+    }
+}
+
 /// Fetches synced lyrics from LRCLIB (free, no API key) and parses the LRC format.
 enum LRCLIB {
     // LRCLIB politely asks clients to identify themselves. Shared with Artwork's
@@ -37,12 +94,6 @@ enum LRCLIB {
     /// consider it a different (mis-synced/shifted) upload and refuse to use it.
     private static let timingTolerance: Double = 4.0
 
-    private struct Candidate {
-        let lines: [LyricLine]
-        var firstTime: Double { lines.first?.time ?? .infinity }
-        var isRomanized: Bool { !containsHangul(lines) }
-    }
-
     /// Resolve synced lyrics for a track. `/api/get` returns LRCLIB's single
     /// canonical match (correct timing); we fetch that AND the search candidates
     /// concurrently. The canonical defines the trusted start time. If the user
@@ -55,9 +106,16 @@ enum LRCLIB {
     /// retries. A non-nil result (possibly `[]`) is definitive: LRCLIB was reached
     /// and either has no synced lyrics for this track or returned the ones below.
     static func fetchSynced(for track: NowPlaying) -> [LyricLine]? {
+        fetchCandidates(for: track)?.first?.lines
+    }
+
+    /// Returns every plausible synced-lyrics result for the current recording,
+    /// with the automatic recommendation first. The caller can expose the rest to
+    /// the user without re-querying or attempting to reconstruct LRCLIB metadata.
+    static func fetchCandidates(for track: NowPlaying) -> [LyricCandidate]? {
         let fullArtist = normalizedArtist(track.artist)
         let first = attempt(track, artist: fullArtist)
-        if let lines = first.lines { return lines }
+        if !first.candidates.isEmpty { return first.candidates }
         // Collaboration credits ("Sunburn et Nelt.", "X feat. Y") usually aren't how
         // LRCLIB indexes the track — it files it under the lead act ("Sunburn"). Retry
         // with just the lead artist. This runs ONLY after the full credit misses, so a
@@ -67,7 +125,7 @@ enum LRCLIB {
         var failed = first.failed
         if lead != fullArtist {
             let second = attempt(track, artist: lead)
-            if let lines = second.lines { return lines }
+            if !second.candidates.isEmpty { return second.candidates }
             failed = failed || second.failed
         }
         // No lyrics found. If any underlying request hard-failed transiently, the
@@ -86,14 +144,17 @@ enum LRCLIB {
     ///      length matches THIS cut (e.g. the 176s acoustic over the 179s studio).
     /// Returns the found lines (nil = none found) plus whether any request failed
     /// transiently.
-    private static func attempt(_ track: NowPlaying, artist: String) -> (lines: [LyricLine]?, failed: Bool) {
+    private static func attempt(
+        _ track: NowPlaying,
+        artist: String
+    ) -> (candidates: [LyricCandidate], failed: Bool) {
         var failed = false
         for title in titleVariants(track.title) {
             let r = resolve(track, artist: artist, title: title)
-            if let lines = r.lines, !lines.isEmpty { return (lines, false) }
+            if !r.candidates.isEmpty { return (r.candidates, false) }
             failed = failed || r.failed
         }
-        return (nil, failed)
+        return ([], failed)
     }
 
     static func titleVariants(_ title: String) -> [String] {
@@ -116,9 +177,13 @@ enum LRCLIB {
     /// time, and a romanised candidate is only swapped in when its timing agrees.
     /// Returns the lines (nil = no usable match) plus whether either concurrent
     /// request hard-failed transiently (so the caller can retry rather than cache).
-    private static func resolve(_ track: NowPlaying, artist norm: String, title: String) -> (lines: [LyricLine]?, failed: Bool) {
-        let canonicalResult = ConcurrentResult<(lines: [LyricLine]?, failed: Bool)>((nil, false))
-        let searchResult = ConcurrentResult<(candidates: [Candidate], failed: Bool)>(([], false))
+    private static func resolve(
+        _ track: NowPlaying,
+        artist norm: String,
+        title: String
+    ) -> (candidates: [LyricCandidate], failed: Bool) {
+        let canonicalResult = ConcurrentResult<(candidate: LyricCandidate?, failed: Bool)>((nil, false))
+        let searchResult = ConcurrentResult<(candidates: [LyricCandidate], failed: Bool)>(([], false))
         let group = DispatchGroup()
         group.enter()
         DispatchQueue.global().async {
@@ -139,22 +204,29 @@ enum LRCLIB {
         // negative, so propagate the failure flag whenever we end up empty-handed.
         let failed = canonical.failed || search.failed
 
-        if let canon = canonical.lines, !canon.isEmpty {
-            // Already romanised (or user doesn't care) → use the trusted version.
-            guard preferRomanized, containsHangul(canon), let ref = canon.first?.time
-            else { return (canon, false) }
-            // Hangul canonical: prefer a romanised candidate whose timing matches.
-            if let romanized = candidates.first(where: {
-                $0.isRomanized && abs($0.firstTime - ref) <= timingTolerance
-            }) {
-                return (romanized.lines, false)
+        if let canonicalCandidate = canonical.candidate {
+            var ordered = deduplicated([canonicalCandidate] + candidates)
+
+            // Preserve the existing automatic preference, but keep every other
+            // result in the returned list so the user can override it.
+            if preferRomanized,
+               containsHangul(canonicalCandidate.lines),
+               let reference = canonicalCandidate.lines.first?.time,
+               let romanizedIndex = ordered.firstIndex(where: {
+                   !containsHangul($0.lines)
+                       && abs(($0.lines.first?.time ?? .infinity) - reference) <= timingTolerance
+               }),
+               romanizedIndex != 0
+            {
+                let romanized = ordered.remove(at: romanizedIndex)
+                ordered.insert(romanized, at: 0)
             }
-            return (canon, false)
+            return (ordered, false)
         }
 
-        // No canonical → best-ranked search candidate, if any survived the filters.
-        if let lines = candidates.first?.lines { return (lines, false) }
-        return (nil, failed)
+        // No canonical → ranked search candidates, if any survived the filters.
+        if !candidates.isEmpty { return (deduplicated(candidates), false) }
+        return ([], failed)
     }
 
     /// Drops a trailing parenthetical from a title: "FASTLIFE! (acoustique)" →
@@ -227,7 +299,11 @@ enum LRCLIB {
     /// for this query), plus `failed` = the request hard-failed transiently (504
     /// /non-JSON/network) after retries. A `failed` request gives no information,
     /// so the caller must treat "no lyrics anywhere" as a failure, not an empty.
-    private static func getExact(_ track: NowPlaying, artist: String, title: String) -> (lines: [LyricLine]?, failed: Bool) {
+    private static func getExact(
+        _ track: NowPlaying,
+        artist: String,
+        title: String
+    ) -> (candidate: LyricCandidate?, failed: Bool) {
         var comps = URLComponents(string: "https://lrclib.net/api/get")!
         comps.queryItems = [
             .init(name: "artist_name", value: artist),
@@ -238,9 +314,8 @@ enum LRCLIB {
         guard case .value(let json) = getJSON(comps.url) else { return (nil, true) }
         // Definitive JSON answer (possibly a 404 object, or a hit without synced
         // lyrics): not a failure, just no usable canonical.
-        guard let dict = json as? [String: Any],
-              let synced = dict["syncedLyrics"] as? String else { return (nil, false) }
-        return (parseLRC(synced), false)
+        guard let dict = json as? [String: Any] else { return (nil, false) }
+        return (makeCandidate(from: dict, fallbackTrack: track), false)
     }
 
     // MARK: - /api/search
@@ -249,28 +324,64 @@ enum LRCLIB {
     /// first (so "Dynamite" beats "Dynamite - EDM Remix"), then closest duration.
     /// `failed` = the search request hard-failed transiently after retries (so an
     /// empty candidate list means "nothing found", not "the request died").
-    private static func searchCandidates(_ track: NowPlaying, artist: String, title: String) -> (candidates: [Candidate], failed: Bool) {
+    private static func searchCandidates(
+        _ track: NowPlaying,
+        artist: String,
+        title: String
+    ) -> (candidates: [LyricCandidate], failed: Bool) {
         var comps = URLComponents(string: "https://lrclib.net/api/search")!
         comps.queryItems = [.init(name: "q", value: "\(artist) \(title)")]
         guard case .value(let json) = getJSON(comps.url) else { return ([], true) }
         guard let arr = json as? [[String: Any]] else { return ([], false) }
 
         let wantTitle = title.lowercased()
-        let scored = arr.compactMap { hit -> (Int, Double, [LyricLine])? in
-            guard let synced = hit["syncedLyrics"] as? String, !synced.isEmpty else { return nil }
+        let scored = arr.compactMap { hit -> (Int, Double, LyricCandidate)? in
             let dur = (hit["duration"] as? NSNumber)?.doubleValue ?? 0
             let delta = abs(dur - track.duration)
             if track.duration > 0 && delta > 7 { return nil }   // not the same cut
-            let lines = parseLRC(synced)
-            if lines.isEmpty { return nil }
+            guard let candidate = makeCandidate(from: hit, fallbackTrack: track) else { return nil }
             let name = (hit["trackName"] as? String ?? "").lowercased()
             let titleRank = name == wantTitle ? 0 : (name.hasPrefix(wantTitle) ? 1 : 2)
-            return (titleRank, delta, lines)
+            return (titleRank, delta, candidate)
         }
         let ranked = scored
             .sorted { ($0.0, $0.1) < ($1.0, $1.1) }
-            .map { Candidate(lines: $0.2) }
+            .map(\.2)
         return (ranked, false)
+    }
+
+    private static func makeCandidate(
+        from hit: [String: Any],
+        fallbackTrack: NowPlaying
+    ) -> LyricCandidate? {
+        guard
+            let synced = hit["syncedLyrics"] as? String,
+            !synced.isEmpty
+        else { return nil }
+        let lines = parseLRC(synced)
+        guard !lines.isEmpty else { return nil }
+
+        let title = hit["trackName"] as? String ?? fallbackTrack.title
+        let artist = hit["artistName"] as? String ?? fallbackTrack.artist
+        let album = hit["albumName"] as? String ?? fallbackTrack.album
+        let duration = (hit["duration"] as? NSNumber)?.doubleValue ?? fallbackTrack.duration
+        let remoteID = (hit["id"] as? NSNumber)?.stringValue
+        let fallbackID = [artist, title, album, String(Int(duration.rounded()))]
+            .joined(separator: "|")
+
+        return LyricCandidate(
+            id: "lrclib-\(remoteID ?? fallbackID)",
+            title: title,
+            artist: artist,
+            album: album,
+            duration: duration,
+            lines: lines
+        )
+    }
+
+    private static func deduplicated(_ candidates: [LyricCandidate]) -> [LyricCandidate] {
+        var seen: Set<String> = []
+        return candidates.filter { seen.insert($0.id).inserted }
     }
 
     // MARK: - networking

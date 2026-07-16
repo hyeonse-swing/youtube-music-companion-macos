@@ -106,6 +106,36 @@ final class LyricsTests: XCTestCase {
         XCTAssertFalse(LRCLIB.containsHangul([LyricLine(time: 0, text: "Yeah, EVERGLOW (whoo)")]))
     }
 
+    // MARK: - lyric candidate labels
+
+    func testCandidateDetectsJapaneseLyrics() {
+        let candidate = LyricCandidate(
+            id: "lrclib-1",
+            title: "鋼の羽根",
+            artist: "RADWIMPS",
+            album: "鋼の羽根",
+            duration: 318,
+            lines: [LyricLine(time: 1, text: "一人だけで生きていける強さを")]
+        )
+
+        XCTAssertEqual(candidate.script, .japanese)
+        XCTAssertEqual(candidate.script.displayName, "Japanese")
+    }
+
+    func testCandidateDetectsKoreanAndLatinLyrics() {
+        let korean = LyricCandidate(
+            id: "lrclib-2", title: "Song", artist: "Artist", album: "", duration: 180,
+            lines: [LyricLine(time: 1, text: "안녕하세요")]
+        )
+        let latin = LyricCandidate(
+            id: "lrclib-3", title: "Song", artist: "Artist", album: "", duration: 180,
+            lines: [LyricLine(time: 1, text: "konnichiwa")]
+        )
+
+        XCTAssertEqual(korean.script, .korean)
+        XCTAssertEqual(latin.script, .latin)
+    }
+
     // MARK: - NowPlaying
 
     func testTrackKeyIncludesAlbumButExcludesDuration() {

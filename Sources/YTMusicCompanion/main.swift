@@ -137,6 +137,11 @@ final class AppDelegate: NSObject, NSApplicationDelegate {
                 self.menuBar?.showNowPlayingPanel()
             }
         }
+        if CommandLine.arguments.contains("--show-settings") {
+            DispatchQueue.main.async {
+                self.menuBar?.showSettingsPanel()
+            }
+        }
     }
 
     func applicationWillTerminate(_ notification: Notification) {
@@ -161,18 +166,22 @@ final class AppDelegate: NSObject, NSApplicationDelegate {
         // sensible target; otherwise clamp into range defensively.
         let idx = max(0, min(model.currentIndex, lines.count - 1))
         let text = lines[idx].text.isEmpty ? "♪" : lines[idx].text
+        let fontSize = CGFloat(model.lyricsFontSize)
+        let rowHeight = OverlayStyle.rowHeight(fontSize: fontSize)
 
         let maxContentWidth = frame.width - 2 * OverlayStyle.horizontalPadding
-        let measured = (text as NSString).size(withAttributes: [.font: OverlayStyle.currentLineFont]).width
+        let measured = (text as NSString).size(
+            withAttributes: [.font: OverlayStyle.currentLineFont(size: fontSize)]
+        ).width
         // minimumScaleFactor shrinks an over-long line to fit the text area, so the
         // rendered width never exceeds maxContentWidth.
         let width = min(measured, maxContentWidth) + 2 * OverlayStyle.hitMargin
 
         return NSRect(
             x: frame.midX - width / 2,
-            y: frame.minY + OverlayStyle.currentLineFromBottom - OverlayStyle.rowHeight / 2,
+            y: frame.minY + OverlayStyle.currentLineFromBottom - rowHeight / 2,
             width: width,
-            height: OverlayStyle.rowHeight
+            height: rowHeight
         )
     }
 }

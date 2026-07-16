@@ -40,6 +40,8 @@ struct LyricsView: View {
                 Color.clear        // playing but no synced lyrics exist → stay invisible
             }
         } else {
+            let fontSize = CGFloat(model.lyricsFontSize)
+            let rowHeight = OverlayStyle.rowHeight(fontSize: fontSize)
             // -1 before the first line starts: line 0 then sits just below the
             // bottom edge and springs up into place the moment it begins.
             let cur = model.currentIndex
@@ -48,14 +50,15 @@ struct LyricsView: View {
             // not a cross-fade). A fixed-size Color.clear sizes the box; the stack is
             // pinned to its TOP and shifted by `offset`, overflowing + clipped.
             let offset = (OverlayStyle.windowHeight - OverlayStyle.currentLineFromBottom)
-                - (CGFloat(cur) * OverlayStyle.rowHeight + OverlayStyle.rowHeight / 2)
+                - (CGFloat(cur) * rowHeight + rowHeight / 2)
 
             Color.clear
                 .frame(height: OverlayStyle.windowHeight)
                 .overlay(alignment: .top) {
                     VStack(spacing: 0) {
                         ForEach(Array(model.lines.enumerated()), id: \.offset) { idx, line in
-                            lineView(idx: idx, line: line).frame(height: OverlayStyle.rowHeight)
+                            lineView(idx: idx, line: line, fontSize: fontSize)
+                                .frame(height: rowHeight)
                         }
                     }
                     .frame(maxWidth: .infinity, alignment: .top)
@@ -67,7 +70,7 @@ struct LyricsView: View {
         }
     }
 
-    private func lineView(idx: Int, line: LyricLine) -> some View {
+    private func lineView(idx: Int, line: LyricLine, fontSize: CGFloat) -> some View {
         let cur = model.currentIndex   // -1 = not started → no line is "current" yet
         let isCurrent = idx == cur
         let d = abs(idx - cur)
@@ -78,10 +81,12 @@ struct LyricsView: View {
         // Size difference via scaleEffect (a smooth transform), NOT font size —
         // changing the font size re-lays-out and re-rasterises the text, which
         // pops instead of animating (very visible with CJK / Korean glyphs).
-        let scale = isCurrent ? 1.0 : OverlayStyle.neighborFontSize / OverlayStyle.currentFontSize
+        let scale = isCurrent
+            ? 1.0
+            : OverlayStyle.neighborFontSize(fontSize: fontSize) / fontSize
 
         return Text(line.text.isEmpty ? "♪" : line.text)
-            .font(.system(size: OverlayStyle.currentFontSize, weight: .bold, design: fontDesign))
+            .font(.system(size: fontSize, weight: .bold, design: fontDesign))
             .foregroundStyle(.white)
             .lineLimit(1)                       // never wrap…
             .minimumScaleFactor(0.45)           // …shrink long lines to fit one line

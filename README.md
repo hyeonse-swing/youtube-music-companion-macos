@@ -8,6 +8,8 @@ A focused macOS menu-bar app for the installed YouTube Music web app. It:
 - Uses the exact title, artist, and album rendered in YouTube Music's player bar,
   including bilingual labels such as `鋼の羽根 - Iron Feather`.
 - Shows the current track and playback progress in a native **Now Playing** panel.
+- Lets you choose lyric versions, lyric size, timing resets, and separate metadata
+  sources for the app and Discord from a native **Settings** panel.
 
 Other players and ordinary browser tabs are intentionally ignored.
 
@@ -21,8 +23,11 @@ version, build number, Discord configuration status, bundle identifier, and proj
   required permission has not been granted yet.
 - Drag the current lyric line to move the overlay. Its position is restored at the
   next launch and falls back automatically if a display is disconnected.
-- **Reset Lyrics Position** returns the overlay to the bottom of the primary display.
+- **Reset Overlay Position** returns the overlay to the bottom of the primary display.
 - Scroll over the current lyric line to adjust lyric synchronization.
+- **Settings…** (`⌘,`) changes lyric size, resets the current or all timing
+  adjustments, selects an LRCLIB result per song, and independently chooses
+  YouTube Music screen metadata or macOS playback metadata for the app and Discord.
 
 ## Requirements
 
@@ -99,6 +104,8 @@ DISCORD_CLIENT_ID=your_application_id .build/debug/YTMusicCompanion --discord
 - `DiscordRPC.swift`: dependency-free Discord local IPC client.
 - `Lyrics.swift` / `LyricsCache.swift`: LRCLIB lookup, LRC parsing, and disk cache.
 - `LyricsView.swift` / `OverlayStyle.swift`: overlay rendering and shared geometry.
+- `CompanionPreferences.swift` / `SettingsWindow.swift`: persisted user choices and
+  the native settings interface.
 - `NowPlayingPanel.swift`: native current-track and playback-progress panel.
 - `OverlayPositionStore.swift`: persistent, display-safe overlay positioning.
 

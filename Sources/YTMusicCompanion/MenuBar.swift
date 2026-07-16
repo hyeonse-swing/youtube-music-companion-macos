@@ -13,6 +13,7 @@ final class MenuBar: NSObject, NSMenuDelegate {
     private let model: PlayerModel
     private let appInformationWindow = AppInformationWindowController()
     private let nowPlayingWindow: NowPlayingWindowController
+    private let settingsWindow: SettingsWindowController
     private let resetOverlayPosition: () -> Void
 
     // Menu items we mutate from state — kept as references so we don't rebuild the
@@ -28,6 +29,7 @@ final class MenuBar: NSObject, NSMenuDelegate {
         self.model = model
         self.resetOverlayPosition = resetOverlayPosition
         nowPlayingWindow = NowPlayingWindowController(model: model)
+        settingsWindow = SettingsWindowController(model: model)
         statusItem = NSStatusBar.system.statusItem(withLength: NSStatusItem.variableLength)
 
         nowPlayingItem = NSMenuItem(title: "No YouTube Music playing", action: nil, keyEquivalent: "")
@@ -91,11 +93,18 @@ final class MenuBar: NSObject, NSMenuDelegate {
         updateExactMetadataItem()
 
         let resetOverlayItem = NSMenuItem(
-            title: "Reset Lyrics Position",
+            title: "Reset Overlay Position",
             action: #selector(resetLyricsPosition(_:)),
             keyEquivalent: ""
         )
         resetOverlayItem.target = self
+
+        let settingsItem = NSMenuItem(
+            title: "Settings…",
+            action: #selector(showSettings(_:)),
+            keyEquivalent: ","
+        )
+        settingsItem.target = self
 
         let quitItem = NSMenuItem(
             title: "Quit",
@@ -119,6 +128,7 @@ final class MenuBar: NSObject, NSMenuDelegate {
         menu.addItem(resetOverlayItem)
         menu.addItem(discordItem)
         menu.addItem(.separator())
+        menu.addItem(settingsItem)
         menu.addItem(aboutItem)
         menu.addItem(quitItem)
 
@@ -141,6 +151,10 @@ final class MenuBar: NSObject, NSMenuDelegate {
 
     func showNowPlayingPanel() {
         nowPlayingWindow.show()
+    }
+
+    func showSettingsPanel() {
+        settingsWindow.show()
     }
 
     @objc private func toggleOverlay(_ sender: NSMenuItem) {
@@ -170,6 +184,10 @@ final class MenuBar: NSObject, NSMenuDelegate {
 
     @objc private func showAbout(_ sender: NSMenuItem) {
         showAppInformation()
+    }
+
+    @objc private func showSettings(_ sender: NSMenuItem) {
+        showSettingsPanel()
     }
 
     @objc private func quit(_ sender: NSMenuItem) {

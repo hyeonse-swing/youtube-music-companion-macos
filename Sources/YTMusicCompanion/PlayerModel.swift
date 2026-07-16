@@ -6,8 +6,6 @@ import Combine
 final class PlayerModel: ObservableObject {
     private static let overlayEnabledKey = "overlayEnabled"
     private static let discordEnabledKey = "discordEnabled"
-    private static let trackOffsetsKey = "syncTrackOffsets"
-    private static let offsetKey = "syncLearnedOffset"
 
     @Published var lines: [LyricLine] = []
     @Published var currentIndex: Int = -1
@@ -15,9 +13,14 @@ final class PlayerModel: ObservableObject {
     @Published private(set) var isPlaying = false    // overlay hides when false (paused/stopped/finished)
     @Published private(set) var isFetching = false   // metadata or lyrics fetch is in flight
     @Published private(set) var sourceNowPlaying: NowPlaying?
+    @Published private(set) var youtubeMusicNowPlaying: NowPlaying?
     @Published private(set) var displayNowPlaying: NowPlaying?
     @Published private(set) var nowPlayingArtwork: NowPlayingArtwork?
     @Published private(set) var playbackElapsed: Double = 0
+    @Published private(set) var lyricCandidates: [LyricCandidate] = []
+    @Published private(set) var selectedLyricCandidateID: String?
+    @Published private(set) var isFetchingLyricCandidates = false
+    @Published private(set) var lyricCandidateStatusMessage: String?
 
     /// User-facing switch from the menubar: when false the overlay window stays off
     /// screen even while music plays (the hover timer in AppDelegate gates on this
@@ -34,9 +37,9 @@ final class PlayerModel: ObservableObject {
             guard discordEnabled != oldValue else { return }
             defaults.set(discordEnabled, forKey: Self.discordEnabledKey)
             if discordEnabled {
-                if let lastNowPlaying {
+                if let lastDiscordNowPlaying {
                     presenceController.update(
-                        for: lastNowPlaying,
+                        for: lastDiscordNowPlaying,
                         sourceArtwork: nowPlayingArtwork
                     )
                 }
@@ -46,10 +49,37 @@ final class PlayerModel: ObservableObject {
         }
     }
 
+    @Published var lyricsFontSize: Double {
+        didSet {
+            guard lyricsFontSize != oldValue else { return }
+            preferences.lyricsFontSize = lyricsFontSize
+            if lyricsFontSize != preferences.lyricsFontSize {
+                lyricsFontSize = preferences.lyricsFontSize
+            }
+        }
+    }
+
+    @Published var displayMetadataSource: MetadataSourcePreference {
+        didSet {
+            guard displayMetadataSource != oldValue else { return }
+            preferences.displayMetadataSource = displayMetadataSource
+            refreshSelectedMetadataOutputs()
+        }
+    }
+
+    @Published var discordMetadataSource: MetadataSourcePreference {
+        didSet {
+            guard discordMetadataSource != oldValue else { return }
+            preferences.discordMetadataSource = discordMetadataSource
+            refreshSelectedMetadataOutputs()
+        }
+    }
+
     private let defaults: UserDefaults
     private let presenceController: DiscordPresenceController
     private let metadataResolver: TrackMetadataResolving
     private let artworkQuery: NowPlayingArtworkQuerying
+    private var preferences: CompanionPreferences
 
     /// Current "Artist · Title" for the menubar readout, or nil when idle. Uses a
     /// middle dot (no em dash) per the app's text style.
@@ -82,17 +112,6 @@ final class PlayerModel: ObservableObject {
     /// refines it by scrolling over the overlay.
     @Published var syncOffset: Double
 
-    /// Per-song corrections, keyed by trackKey. The per-song latency is largely
-    /// random (a remaster, an MV edit, a different upload), so a correction must
-    /// stick to ITS song and nowhere else — otherwise fixing one outlier drags
-    /// every other song off. A song replays with exactly the offset you last gave it.
-    private var trackOffsets: [String: Double]
-
-    /// Gentle global baseline that UNSEEN songs start from — the typical output
-    /// latency. Only MODEST corrections feed it (see `commit`); large per-song
-    /// outliers are remembered per-song above and never allowed to poison it.
-    private var learnedOffset: Double
-
     // Interpolation state, refreshed on every poll.
     private var baseElapsed: Double = 0
     private var baseDate = Date()
@@ -103,7 +122,7 @@ final class PlayerModel: ObservableObject {
 
     // The most recent valid snapshot, so the menubar toggle can re-publish presence
     // without waiting for the next poll.
-    private var lastNowPlaying: NowPlaying?
+    private var lastDiscordNowPlaying: NowPlaying?
 
     // MediaRemote remains the stable playback identity. YouTube Music's player bar
     // supplies the exact visible labels used for display, lyrics, and Discord.
@@ -136,6 +155,8 @@ final class PlayerModel: ObservableObject {
     // simply has no lyrics on LRCLIB *yet* (e.g. a new release) is re-checked next
     // session instead of being cached empty forever.
     private var lyricsCache: [String: [LyricLine]] = [:]
+    private var lyricCandidateCache: [String: [LyricCandidate]] = [:]
+    private var resolvingLyricCandidateKeys: Set<String> = []
 
     // True while a MediaRemote query is in flight, so the 1s poll never stacks
     // overlapping subprocess spawns if a query outruns the interval.
@@ -150,15 +171,18 @@ final class PlayerModel: ObservableObject {
         artworkQuery: NowPlayingArtworkQuerying = DefaultNowPlayingArtworkQuery(),
         defaults: UserDefaults = .standard
     ) {
+        let preferences = CompanionPreferences(defaults: defaults)
         self.presenceController = presenceController
         self.metadataResolver = metadataResolver
         self.artworkQuery = artworkQuery
         self.defaults = defaults
+        self.preferences = preferences
         overlayEnabled = defaults.object(forKey: Self.overlayEnabledKey) as? Bool ?? true
         discordEnabled = defaults.object(forKey: Self.discordEnabledKey) as? Bool ?? true
-        syncOffset = defaults.double(forKey: Self.offsetKey)
-        learnedOffset = defaults.double(forKey: Self.offsetKey)
-        trackOffsets = defaults.dictionary(forKey: Self.trackOffsetsKey) as? [String: Double] ?? [:]
+        lyricsFontSize = preferences.lyricsFontSize
+        displayMetadataSource = preferences.displayMetadataSource
+        discordMetadataSource = preferences.discordMetadataSource
+        syncOffset = preferences.learnedTimingOffset
     }
 
     func start() {
@@ -218,9 +242,13 @@ final class PlayerModel: ObservableObject {
         }
 
         if let metadata = metadataCache[sourceKey] {
-            updateActiveTrack(source.applying(metadata), sourceKey: sourceKey)
+            updateActiveTrack(
+                source: source,
+                youtubeMusicTrack: source.applying(metadata),
+                sourceKey: sourceKey
+            )
         } else if let retryAfter = metadataRetryAfter[sourceKey], retryAfter > Date() {
-            updateActiveTrack(source, sourceKey: sourceKey)
+            updateActiveTrack(source: source, youtubeMusicTrack: nil, sourceKey: sourceKey)
         } else {
             metadataRetryAfter.removeValue(forKey: sourceKey)
             resolveMetadata(for: source, sourceKey: sourceKey)
@@ -231,9 +259,10 @@ final class PlayerModel: ObservableObject {
         isPlaying = false
         isFetching = false
         currentTrack = nil
-        lastNowPlaying = nil
+        lastDiscordNowPlaying = nil
         latestSourceSnapshot = nil
         sourceNowPlaying = nil
+        youtubeMusicNowPlaying = nil
         displayNowPlaying = nil
         nowPlayingArtwork = nil
         playbackElapsed = 0
@@ -245,6 +274,10 @@ final class PlayerModel: ObservableObject {
         currentTrackKey = nil
         lines = []
         currentIndex = -1
+        lyricCandidates = []
+        selectedLyricCandidateID = nil
+        isFetchingLyricCandidates = false
+        lyricCandidateStatusMessage = nil
     }
 
     private func updatePlaybackClock(from source: NowPlaying) {
@@ -261,13 +294,18 @@ final class PlayerModel: ObservableObject {
 
         currentTrackKey = sourceKey
         activatedTrackKey = nil
-        lastNowPlaying = nil
+        lastDiscordNowPlaying = nil
+        youtubeMusicNowPlaying = nil
         displayNowPlaying = source
         currentTrack = trackDescription(for: source)
-        syncOffset = trackOffsets[sourceKey] ?? learnedOffset
+        syncOffset = preferences.timingOffset(for: sourceKey)
         loadedOffset = syncOffset
         currentIndex = -1
         lines = []
+        lyricCandidates = []
+        selectedLyricCandidateID = nil
+        lyricCandidateStatusMessage = nil
+        isFetchingLyricCandidates = false
         isFetching = true
         presenceController.clear()
         loadArtwork(sourceKey: sourceKey)
@@ -296,25 +334,50 @@ final class PlayerModel: ObservableObject {
             // interval instead of either giving up for the session or hammering the
             // storefront once per one-second playback poll.
             metadataRetryAfter[sourceKey] = Date().addingTimeInterval(15)
-            updateActiveTrack(latest, sourceKey: sourceKey)
+            updateActiveTrack(source: latest, youtubeMusicTrack: nil, sourceKey: sourceKey)
             return
         }
 
         metadataCache[sourceKey] = metadata
-        updateActiveTrack(latest.applying(metadata), sourceKey: sourceKey)
+        updateActiveTrack(
+            source: latest,
+            youtubeMusicTrack: latest.applying(metadata),
+            sourceKey: sourceKey
+        )
     }
 
-    private func updateActiveTrack(_ track: NowPlaying, sourceKey: String) {
-        lastNowPlaying = track
-        displayNowPlaying = track
-        currentTrack = trackDescription(for: track)
-        if discordEnabled {
-            presenceController.update(for: track, sourceArtwork: nowPlayingArtwork)
-        }
+    private func updateActiveTrack(
+        source: NowPlaying,
+        youtubeMusicTrack: NowPlaying?,
+        sourceKey: String
+    ) {
+        sourceNowPlaying = source
+        youtubeMusicNowPlaying = youtubeMusicTrack
+        refreshSelectedMetadataOutputs()
 
         guard activatedTrackKey != sourceKey else { return }
         activatedTrackKey = sourceKey
-        loadLyrics(for: track, cacheKey: sourceKey)
+        loadLyrics(for: youtubeMusicTrack ?? source, cacheKey: sourceKey)
+    }
+
+    private func refreshSelectedMetadataOutputs() {
+        guard let source = sourceNowPlaying else { return }
+
+        let display = displayMetadataSource.select(
+            youtubeMusic: youtubeMusicNowPlaying,
+            macOS: source
+        ) ?? source
+        displayNowPlaying = display
+        currentTrack = trackDescription(for: display)
+
+        let discordTrack = discordMetadataSource.select(
+            youtubeMusic: youtubeMusicNowPlaying,
+            macOS: source
+        ) ?? source
+        lastDiscordNowPlaying = discordTrack
+        if discordEnabled {
+            presenceController.update(for: discordTrack, sourceArtwork: nowPlayingArtwork)
+        }
     }
 
     private func loadArtwork(sourceKey: String) {
@@ -345,8 +408,8 @@ final class PlayerModel: ObservableObject {
         if let artwork {
             artworkCache[sourceKey] = artwork
             nowPlayingArtwork = artwork
-            if discordEnabled, let lastNowPlaying {
-                presenceController.update(for: lastNowPlaying, sourceArtwork: artwork)
+            if discordEnabled, let lastDiscordNowPlaying {
+                presenceController.update(for: lastDiscordNowPlaying, sourceArtwork: artwork)
             }
         } else {
             missingArtworkKeys.insert(sourceKey)
@@ -359,9 +422,16 @@ final class PlayerModel: ObservableObject {
     }
 
     private func loadLyrics(for track: NowPlaying, cacheKey: String) {
+        if let candidates = lyricCandidateCache[cacheKey] {
+            applyLyricCandidates(candidates, cacheKey: cacheKey)
+            isFetching = false
+            return
+        }
+
         if let cached = lyricsCache[cacheKey] {
             lines = cached
             isFetching = false
+            fetchLyricCandidates(for: track, cacheKey: cacheKey, preservesCurrentLines: true)
             return
         }
 
@@ -372,28 +442,88 @@ final class PlayerModel: ObservableObject {
             lyricsCache[cacheKey] = disk
             lines = disk
             isFetching = false
+            fetchLyricCandidates(for: track, cacheKey: cacheKey, preservesCurrentLines: true)
             return
         }
 
         lines = []
         isFetching = true
+        fetchLyricCandidates(for: track, cacheKey: cacheKey, preservesCurrentLines: false)
+    }
+
+    private func fetchLyricCandidates(
+        for track: NowPlaying,
+        cacheKey: String,
+        preservesCurrentLines: Bool
+    ) {
+        guard resolvingLyricCandidateKeys.insert(cacheKey).inserted else { return }
+        isFetchingLyricCandidates = true
+        lyricCandidateStatusMessage = nil
+        if !preservesCurrentLines { isFetching = true }
+
         DispatchQueue.global(qos: .userInitiated).async {
-            let fetched = LRCLIB.fetchSynced(for: track)
+            let fetched = LRCLIB.fetchCandidates(for: track)
             DispatchQueue.main.async {
+                self.resolvingLyricCandidateKeys.remove(cacheKey)
                 guard cacheKey == self.currentTrackKey else { return }
+                self.isFetchingLyricCandidates = false
                 guard let fetched else {
                     // A transient LRCLIB failure retries on the next playback poll,
                     // without throwing away the already-resolved page metadata.
-                    self.activatedTrackKey = nil
+                    if self.lines.isEmpty { self.activatedTrackKey = nil }
+                    self.isFetching = false
+                    self.lyricCandidateStatusMessage =
+                        "Couldn’t load lyric choices. Check your connection and try again."
                     return
                 }
 
-                self.lyricsCache[cacheKey] = fetched
-                if !fetched.isEmpty { LyricsCache.save(fetched, for: cacheKey) }
-                self.lines = fetched
+                self.lyricCandidateCache[cacheKey] = fetched
+                self.applyLyricCandidates(fetched, cacheKey: cacheKey)
                 self.isFetching = false
             }
         }
+    }
+
+    private func applyLyricCandidates(_ candidates: [LyricCandidate], cacheKey: String) {
+        lyricCandidates = candidates
+        guard !candidates.isEmpty else {
+            selectedLyricCandidateID = nil
+            lines = []
+            lyricsCache[cacheKey] = []
+            lyricCandidateStatusMessage = "No synced lyric choices were found for this song."
+            return
+        }
+
+        let preferredID = preferences.selectedLyricCandidate(for: cacheKey)
+        let selected = candidates.first(where: { $0.id == preferredID }) ?? candidates[0]
+        selectedLyricCandidateID = selected.id
+        lines = selected.lines
+        lyricsCache[cacheKey] = selected.lines
+        LyricsCache.save(selected.lines, for: cacheKey)
+        lyricCandidateStatusMessage = nil
+        tick()
+    }
+
+    func selectLyricCandidate(_ candidateID: String) {
+        guard
+            let cacheKey = currentTrackKey,
+            let selected = lyricCandidates.first(where: { $0.id == candidateID })
+        else { return }
+
+        preferences.selectLyricCandidate(candidateID, for: cacheKey)
+        selectedLyricCandidateID = candidateID
+        lines = selected.lines
+        lyricsCache[cacheKey] = selected.lines
+        LyricsCache.save(selected.lines, for: cacheKey)
+        tick()
+    }
+
+    func reloadLyricCandidates() {
+        guard
+            let cacheKey = currentTrackKey,
+            let track = youtubeMusicNowPlaying ?? sourceNowPlaying
+        else { return }
+        fetchLyricCandidates(for: track, cacheKey: cacheKey, preservesCurrentLines: true)
     }
 
     /// Switch to a line slightly BEFORE its timestamp so it finishes gliding to
@@ -408,6 +538,25 @@ final class PlayerModel: ObservableObject {
         syncOffset = (min(15, max(-15, syncOffset + delta)) * 100).rounded() / 100
     }
 
+    func resetCurrentLyricsTiming() {
+        guard let currentTrackKey else { return }
+        preferences.resetTimingOffset(for: currentTrackKey)
+        syncOffset = 0
+        loadedOffset = 0
+        tick()
+    }
+
+    func resetAllLyricsTiming() {
+        preferences.resetAllTimingOffsets()
+        syncOffset = 0
+        loadedOffset = 0
+        tick()
+    }
+
+    func resetLyricsFontSize() {
+        lyricsFontSize = CompanionPreferences.defaultLyricsFontSize
+    }
+
     /// Persist a just-finished track's correction. The offset is saved per-song
     /// (so it's exact next replay), and ONLY modest corrections ease the global
     /// baseline — a large outlier like −5s stays with its song and can't drag the
@@ -417,20 +566,16 @@ final class PlayerModel: ObservableObject {
         // that merely played through).
         guard abs(syncOffset - loadedOffset) >= 0.05 else { return }
 
-        if abs(syncOffset) < 0.05 {
-            trackOffsets.removeValue(forKey: trackKey)            // correction cleared → reclaim the slot
-        } else {
-            trackOffsets[trackKey] = syncOffset
-        }
-        defaults.set(trackOffsets, forKey: Self.trackOffsetsKey)
+        preferences.saveTimingOffset(syncOffset, for: trackKey)
 
         guard abs(syncOffset) <= 2.5 else { return }              // outlier → per-song only
+        var learnedOffset = preferences.learnedTimingOffset
         if learnedOffset == 0 {
             learnedOffset = syncOffset                            // first calibration → adopt
         } else if syncOffset != learnedOffset {
             learnedOffset += 0.4 * (syncOffset - learnedOffset)   // ease toward the new value
         }
-        defaults.set(learnedOffset, forKey: Self.offsetKey)
+        preferences.saveLearnedTimingOffset(learnedOffset)
     }
 
     private func tick() {
