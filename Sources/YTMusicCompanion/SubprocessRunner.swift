@@ -1,5 +1,6 @@
 import Foundation
 import OSLog
+import Darwin
 
 struct SubprocessMetricsSnapshot: Equatable {
     let activeCount: Int
@@ -43,23 +44,38 @@ private enum SubprocessMetrics {
 }
 
 private final class ProcessTerminationController: @unchecked Sendable {
+    private static let forceTerminationDelay: TimeInterval = 0.25
+
     private let lock = NSLock()
     private let process: Process
     private var finished = false
     private var timedOut = false
+    private var outputLimitExceeded = false
 
     init(process: Process) {
         self.process = process
     }
 
-    func terminate(markingTimeout: Bool = false) {
+    func terminate(
+        markingTimeout: Bool = false,
+        markingOutputLimitExceeded: Bool = false
+    ) {
         let shouldTerminate = lock.withLock { () -> Bool in
             guard !finished else { return false }
             if markingTimeout { timedOut = true }
+            if markingOutputLimitExceeded { outputLimitExceeded = true }
             return true
         }
         guard shouldTerminate, process.isRunning else { return }
+
+        let processIdentifier = process.processIdentifier
         process.terminate()
+        DispatchQueue.global(qos: .utility).asyncAfter(
+            deadline: .now() + Self.forceTerminationDelay
+        ) { [process] in
+            guard process.isRunning else { return }
+            Darwin.kill(processIdentifier, SIGKILL)
+        }
     }
 
     func markFinished() {
@@ -69,6 +85,10 @@ private final class ProcessTerminationController: @unchecked Sendable {
     var didTimeOut: Bool {
         lock.withLock { timedOut }
     }
+
+    var didExceedOutputLimit: Bool {
+        lock.withLock { outputLimitExceeded }
+    }
 }
 
 struct SubprocessResult {
@@ -76,9 +96,10 @@ struct SubprocessResult {
     let terminationStatus: Int32
     let wasCancelled: Bool
     let timedOut: Bool
+    let outputLimitExceeded: Bool
 
     var succeeded: Bool {
-        terminationStatus == 0 && !wasCancelled && !timedOut
+        terminationStatus == 0 && !wasCancelled && !timedOut && !outputLimitExceeded
     }
 }
 
@@ -88,6 +109,9 @@ struct SubprocessResult {
 /// prevents an abandoned track from leaving `curl`, `osascript`, or the artwork
 /// bridge alive until its normal timeout.
 enum SubprocessRunner {
+    private static let defaultMaximumOutputBytes = 16 * 1_024 * 1_024
+    private static let readChunkSize = 64 * 1_024
+
     private static let logger = Logger(
         subsystem: AppConfiguration.bundleIdentifier,
         category: "Subprocess"
@@ -101,9 +125,11 @@ enum SubprocessRunner {
         executable: String,
         arguments: [String],
         timeout: TimeInterval,
+        maximumOutputBytes: Int = defaultMaximumOutputBytes,
         cancellation: CancellationToken
     ) -> SubprocessResult? {
         guard !cancellation.isCancelled else { return nil }
+        precondition(maximumOutputBytes > 0)
 
         let process = Process()
         process.executableURL = URL(fileURLWithPath: executable)
@@ -133,7 +159,11 @@ enum SubprocessRunner {
             execute: watchdog
         )
 
-        let data = output.fileHandleForReading.readDataToEndOfFile()
+        let data = readOutput(
+            from: output.fileHandleForReading,
+            maximumBytes: maximumOutputBytes,
+            termination: termination
+        )
         process.waitUntilExit()
         termination.markFinished()
         watchdog.cancel()
@@ -146,13 +176,46 @@ enum SubprocessRunner {
             logger.debug("Cancelled \(executable, privacy: .public)")
         } else if timedOut {
             logger.warning("Timed out \(executable, privacy: .public) after \(timeout, privacy: .public)s")
+        } else if termination.didExceedOutputLimit {
+            logger.warning(
+                "Stopped \(executable, privacy: .public) after stdout exceeded \(maximumOutputBytes, privacy: .public) bytes"
+            )
         }
 
         return SubprocessResult(
             output: data,
             terminationStatus: process.terminationStatus,
             wasCancelled: wasCancelled,
-            timedOut: timedOut
+            timedOut: timedOut,
+            outputLimitExceeded: termination.didExceedOutputLimit
         )
+    }
+
+    private static func readOutput(
+        from handle: FileHandle,
+        maximumBytes: Int,
+        termination: ProcessTerminationController
+    ) -> Data {
+        var output = Data()
+        output.reserveCapacity(min(maximumBytes, readChunkSize))
+
+        while true {
+            let chunk = autoreleasepool {
+                try? handle.read(upToCount: readChunkSize)
+            }
+            guard let chunk, !chunk.isEmpty else { break }
+
+            let remaining = maximumBytes - output.count
+            if chunk.count <= remaining {
+                output.append(chunk)
+                continue
+            }
+
+            if remaining > 0 {
+                output.append(chunk.prefix(remaining))
+            }
+            termination.terminate(markingOutputLimitExceeded: true)
+        }
+        return output
     }
 }

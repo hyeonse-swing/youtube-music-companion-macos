@@ -114,4 +114,39 @@ final class DiscordRPCTests: XCTestCase {
         XCTAssertEqual(assets["large_url"] as? String, coverURL.absoluteString)
         XCTAssertEqual(assets["small_url"] as? String, smallURL.absoluteString)
     }
+
+    func testActivityEncodingClampsUnicodeTextInLinearByteOrder() throws {
+        let activity = PresenceActivity(
+            name: "",
+            details: String(repeating: "가", count: 100),
+            state: "x",
+            start: nil,
+            end: nil,
+            largeImage: nil,
+            largeImageText: nil,
+            smallImage: nil,
+            smallImageText: nil
+        )
+
+        let data = try XCTUnwrap(
+            DiscordRPC.encodedSetActivityCommand(
+                activity,
+                pid: 42,
+                nonce: "test-nonce"
+            )
+        )
+        let object = try XCTUnwrap(
+            JSONSerialization.jsonObject(with: data) as? [String: Any]
+        )
+        let args = try XCTUnwrap(object["args"] as? [String: Any])
+        let encodedActivity = try XCTUnwrap(args["activity"] as? [String: Any])
+        let name = try XCTUnwrap(encodedActivity["name"] as? String)
+        let details = try XCTUnwrap(encodedActivity["details"] as? String)
+        let state = try XCTUnwrap(encodedActivity["state"] as? String)
+
+        XCTAssertEqual(name.utf8.count, 2)
+        XCTAssertLessThanOrEqual(details.utf8.count, 128)
+        XCTAssertEqual(details, String(repeating: "가", count: 42))
+        XCTAssertEqual(state, "x ")
+    }
 }

@@ -83,11 +83,15 @@ struct VerifiedArtworkResolver: ArtworkResolving {
         sourceArtwork: NowPlayingArtwork,
         cancellation: CancellationToken
     ) -> String? {
+        guard let sourceFingerprint = ArtworkImageMatcher.fingerprint(from: sourceArtwork.data) else {
+            return nil
+        }
+
         for candidateURL in catalog.candidateURLs(for: track, cancellation: cancellation) {
             guard !cancellation.isCancelled else { return nil }
             guard
                 let candidateData = loader.data(from: candidateURL, cancellation: cancellation),
-                ArtworkImageMatcher.isSameArtwork(sourceArtwork.data, candidateData)
+                ArtworkImageMatcher.isSameArtwork(sourceFingerprint, candidateData)
             else { continue }
             return Artwork.upgradedURL(candidateURL).absoluteString
         }

@@ -32,7 +32,11 @@ private struct NowPlayingPanelView: View {
     private func trackContent(source: NowPlaying, display: NowPlaying) -> some View {
         VStack(alignment: .leading, spacing: 18) {
             HStack(alignment: .top, spacing: 16) {
-                artworkView(for: display)
+                ArtworkThumbnailView(
+                    artwork: model.nowPlayingArtwork,
+                    title: display.title
+                )
+                .equatable()
 
                 VStack(alignment: .leading, spacing: 4) {
                     Text(display.title)
@@ -86,11 +90,18 @@ private struct NowPlayingPanelView: View {
 
         }
     }
+}
 
-    @ViewBuilder
-    private func artworkView(for track: NowPlaying) -> some View {
+/// Artwork decoding is intentionally isolated in an equatable child view. Playback
+/// clock publications can refresh the panel several times per second, while the
+/// cover normally changes only once per track.
+private struct ArtworkThumbnailView: View, Equatable {
+    let artwork: NowPlayingArtwork?
+    let title: String
+
+    var body: some View {
         if
-            let data = model.nowPlayingArtwork?.data,
+            let data = artwork?.data,
             let image = NSImage(data: data)
         {
             Image(nsImage: image)
@@ -98,7 +109,7 @@ private struct NowPlayingPanelView: View {
                 .scaledToFill()
                 .frame(width: 72, height: 72)
                 .clipShape(RoundedRectangle(cornerRadius: 12, style: .continuous))
-                .accessibilityLabel("Album artwork for \(track.title)")
+                .accessibilityLabel("Album artwork for \(title)")
         } else {
             Image(systemName: "music.note")
                 .font(.system(size: 36, weight: .medium))

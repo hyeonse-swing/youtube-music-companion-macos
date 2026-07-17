@@ -137,6 +137,41 @@ final class LyricLayersTests: XCTestCase {
         )
     }
 
+    func testTranslationRequestCarriesTheDetectedSourceLanguage() throws {
+        let lines = [
+            LyricLine(time: 1, text: "鋼の羽根"),
+            LyricLine(time: 4, text: "空を飛ぶ"),
+        ]
+        let sourceLanguage = LyricRomanizer.detectedLanguage(in: lines)?.rawValue
+
+        XCTAssertEqual(sourceLanguage, "ja")
+        let request = LyricTranslationRequest(
+            id: UUID(),
+            trackKey: "artist|song|album",
+            sourceLanguage: try XCTUnwrap(sourceLanguage),
+            targetLanguage: "ko",
+            tone: .naturalLyrics,
+            sourceLines: lines
+        )
+        XCTAssertEqual(request.sourceLanguage, "ja")
+    }
+
+    func testTranslationRequestAllowsAutomaticDetectionForAmbiguousLyrics() {
+        let lines = [LyricLine(time: 1, text: "♪")]
+        let sourceLanguage = LyricRomanizer.detectedLanguage(in: lines)?.rawValue
+
+        XCTAssertNil(sourceLanguage)
+        let request = LyricTranslationRequest(
+            id: UUID(),
+            trackKey: "artist|ambiguous|album",
+            sourceLanguage: sourceLanguage,
+            targetLanguage: "ko",
+            tone: .naturalLyrics,
+            sourceLines: lines
+        )
+        XCTAssertNil(request.sourceLanguage)
+    }
+
     func testContextualTranslationRemovesTranslatorParagraphSpacing() {
         let translated = """
         첫 번째 줄
@@ -297,6 +332,66 @@ final class LyricTranslationCacheTests: XCTestCase {
                 tone: .naturalLyrics,
                 sourceLines: lines
             )
+        )
+    }
+
+    func testSavingIdenticalTranslationDoesNotRewriteTheCacheFile() throws {
+        let lines = [LyricLine(time: 1, text: "hello")]
+        LyricTranslationCache.save(
+            ["안녕"],
+            for: "artist|song|album",
+            targetLanguage: "ko",
+            tone: .naturalLyrics,
+            sourceLines: lines
+        )
+        let file = try XCTUnwrap(cacheFiles().first)
+        let firstModification = try file.resourceValues(
+            forKeys: [.contentModificationDateKey]
+        ).contentModificationDate
+
+        Thread.sleep(forTimeInterval: 0.05)
+        LyricTranslationCache.save(
+            ["안녕"],
+            for: "artist|song|album",
+            targetLanguage: "ko",
+            tone: .naturalLyrics,
+            sourceLines: lines
+        )
+
+        let secondModification = try file.resourceValues(
+            forKeys: [.contentModificationDateKey]
+        ).contentModificationDate
+        XCTAssertEqual(secondModification, firstModification)
+    }
+
+    func testStatisticsRemainAccurateDuringConcurrentSaves() throws {
+        DispatchQueue.concurrentPerform(iterations: 16) { index in
+            let lines = [LyricLine(time: Double(index), text: "line \(index)")]
+            LyricTranslationCache.save(
+                ["번역 \(index)"],
+                for: "artist|song|\(index)",
+                targetLanguage: "ko",
+                tone: .naturalLyrics,
+                sourceLines: lines
+            )
+            _ = LyricTranslationCache.statistics()
+        }
+
+        let files = try cacheFiles()
+        let expectedBytes = try files.reduce(0) {
+            $0 + (try $1.resourceValues(forKeys: [.fileSizeKey]).fileSize ?? 0)
+        }
+        XCTAssertEqual(
+            LyricTranslationCache.statistics(),
+            LyricsCacheStatistics(fileCount: files.count, totalBytes: expectedBytes)
+        )
+    }
+
+    private func cacheFiles() throws -> [URL] {
+        guard FileManager.default.fileExists(atPath: tempDirectory.path) else { return [] }
+        return try FileManager.default.contentsOfDirectory(
+            at: tempDirectory,
+            includingPropertiesForKeys: [.contentModificationDateKey]
         )
     }
 }

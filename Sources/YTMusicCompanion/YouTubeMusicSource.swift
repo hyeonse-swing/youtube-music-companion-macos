@@ -52,25 +52,13 @@ enum YouTubeMusicSource {
     }
 
     private static func processArguments(pid: Int32) -> String? {
-        let process = Process()
-        process.executableURL = URL(fileURLWithPath: "/bin/ps")
-        process.arguments = ["-p", String(pid), "-o", "args="]
-
-        let output = Pipe()
-        process.standardOutput = output
-        process.standardError = FileHandle.nullDevice
-
-        do {
-            try process.run()
-        } catch {
-            return nil
-        }
-
-        let watchdog = DispatchWorkItem { process.terminate() }
-        DispatchQueue.global().asyncAfter(deadline: .now() + 2, execute: watchdog)
-        let data = output.fileHandleForReading.readDataToEndOfFile()
-        process.waitUntilExit()
-        watchdog.cancel()
-        return String(data: data, encoding: .utf8)
+        guard let result = SubprocessRunner.run(
+            executable: "/bin/ps",
+            arguments: ["-p", String(pid), "-o", "args="],
+            timeout: 2,
+            maximumOutputBytes: 64 * 1_024,
+            cancellation: CancellationToken()
+        ), result.succeeded else { return nil }
+        return String(data: result.output, encoding: .utf8)
     }
 }

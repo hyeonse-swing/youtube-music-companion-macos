@@ -109,6 +109,7 @@ enum LyricTranslationStatus: Equatable {
 struct LyricTranslationRequest: Identifiable, Equatable {
     let id: UUID
     let trackKey: String
+    let sourceLanguage: String?
     let targetLanguage: String
     let tone: LyricTranslationTone
     let sourceLines: [LyricLine]

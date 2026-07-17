@@ -49,7 +49,9 @@ final class OriginalScriptMetadataResolver: TrackMetadataResolving, @unchecked S
     private static let maximumCandidatesToVerify = 5
 
     private let cacheLock = NSLock()
-    private var cache: [String: TrackMetadata] = [:]
+    private var cache = LRUCache<String, TrackMetadata>(
+        capacity: SessionCacheLimits.metadata
+    )
 
     func resolve(for track: NowPlaying) -> TrackMetadata? {
         resolve(for: track, cancellation: CancellationToken())
@@ -75,11 +77,9 @@ final class OriginalScriptMetadataResolver: TrackMetadataResolving, @unchecked S
             return track.metadata
         }
 
-        if let directlyVerified = Self.chooseVerifiedMetadata(
-            for: track,
-            from: japaneseResults,
-            localizedResultsByTrackID: [:]
-        ) {
+        if let directlyVerified = candidates.first(where: {
+            Self.candidateDirectlyMatchesSource($0, track: track)
+        })?.metadata {
             cache(directlyVerified, for: track.trackKey)
             return directlyVerified
         }
@@ -94,13 +94,15 @@ final class OriginalScriptMetadataResolver: TrackMetadataResolving, @unchecked S
                 continue
             }
             completedLookup = true
-            if let verified = Self.chooseVerifiedMetadata(
-                for: track,
-                from: japaneseResults,
-                localizedResultsByTrackID: [candidate.trackID: results]
-            ) {
-                cache(verified, for: track.trackKey)
-                return verified
+            let matchesSource = results.contains { localized in
+                guard Self.trackID(in: localized) == candidate.trackID else {
+                    return false
+                }
+                return Self.localizedResult(localized, matches: track)
+            }
+            if matchesSource {
+                cache(candidate.metadata, for: track.trackKey)
+                return candidate.metadata
             }
         }
 

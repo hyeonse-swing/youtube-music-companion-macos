@@ -24,21 +24,37 @@ struct NowPlayingArtwork: Equatable, Sendable {
 }
 
 enum ArtworkImageMatcher {
+    struct Fingerprint {
+        fileprivate let pixels: [UInt8]
+    }
+
     private static let sampleDimension = 24
     private static let maximumMeanDifference = 0.12
 
     static func isSameArtwork(_ left: Data, _ right: Data) -> Bool {
         guard
-            let leftPixels = normalizedPixels(from: left),
+            let leftFingerprint = fingerprint(from: left)
+        else { return false }
+        return isSameArtwork(leftFingerprint, right)
+    }
+
+    static func fingerprint(from data: Data) -> Fingerprint? {
+        normalizedPixels(from: data).map(Fingerprint.init(pixels:))
+    }
+
+    static func isSameArtwork(_ left: Fingerprint, _ right: Data) -> Bool {
+        guard
             let rightPixels = normalizedPixels(from: right),
-            leftPixels.count == rightPixels.count
+            left.pixels.count == rightPixels.count
         else { return false }
 
         var totalDifference = 0
         var comparedChannels = 0
-        for index in stride(from: 0, to: leftPixels.count, by: 4) {
+        for index in stride(from: 0, to: left.pixels.count, by: 4) {
             for channel in 0..<3 {
-                totalDifference += abs(Int(leftPixels[index + channel]) - Int(rightPixels[index + channel]))
+                totalDifference += abs(
+                    Int(left.pixels[index + channel]) - Int(rightPixels[index + channel])
+                )
                 comparedChannels += 1
             }
         }

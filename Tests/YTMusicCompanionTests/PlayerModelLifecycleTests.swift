@@ -1,4 +1,5 @@
 import XCTest
+import Combine
 @testable import YTMusicCompanion
 
 @MainActor
@@ -26,6 +27,55 @@ final class PlayerModelLifecycleTests: XCTestCase {
 
         XCTAssertEqual(query.callCount, 1)
         XCTAssertTrue(model.runtimeDiagnostics.activeOperations.isEmpty)
+    }
+
+    func testStopReleasesModelWhileANonCooperativePollIsStillBlocked() {
+        let started = expectation(description: "non-cooperative poll started")
+        let query = NonCooperativeNowPlayingQuery(started: started)
+        let suiteName = "PlayerModelRetentionTests.\(UUID().uuidString)"
+        let defaults = UserDefaults(suiteName: suiteName)!
+        defer {
+            query.release()
+            defaults.removePersistentDomain(forName: suiteName)
+        }
+        weak var weakModel: PlayerModel?
+        var model: PlayerModel? = PlayerModel(
+            presenceController: DiscordPresenceController(
+                publisher: LifecyclePresencePublisher()
+            ),
+            nowPlayingQuery: query,
+            defaults: defaults
+        )
+        weakModel = model
+
+        model?.start()
+        wait(for: [started], timeout: 1)
+        model?.stop()
+        model = nil
+
+        XCTAssertNil(weakModel)
+    }
+
+    func testUnchangedRuntimeDiagnosticsAreNotRepublished() {
+        let suiteName = "PlayerModelDiagnosticsTests.\(UUID().uuidString)"
+        let defaults = UserDefaults(suiteName: suiteName)!
+        defer { defaults.removePersistentDomain(forName: suiteName) }
+        let model = PlayerModel(
+            presenceController: DiscordPresenceController(
+                publisher: LifecyclePresencePublisher()
+            ),
+            defaults: defaults
+        )
+        model.clearSavedLyricsCache()
+        var publicationCount = 0
+        let observation = model.$runtimeDiagnostics
+            .dropFirst()
+            .sink { _ in publicationCount += 1 }
+
+        model.clearSavedLyricsCache()
+
+        withExtendedLifetime(observation) {}
+        XCTAssertEqual(publicationCount, 0)
     }
 
     func testTrackChangeCancelsThePreviousMetadataLookup() {
@@ -292,6 +342,25 @@ private final class BlockingNowPlayingQuery: NowPlayingQuerying, @unchecked Send
         _ = semaphore.wait(timeout: .now() + 5)
         registration.invalidate()
         return nil
+    }
+}
+
+private final class NonCooperativeNowPlayingQuery: NowPlayingQuerying, @unchecked Sendable {
+    private let started: XCTestExpectation
+    private let semaphore = DispatchSemaphore(value: 0)
+
+    init(started: XCTestExpectation) {
+        self.started = started
+    }
+
+    func query(cancellation: CancellationToken) -> NowPlaying? {
+        started.fulfill()
+        semaphore.wait()
+        return nil
+    }
+
+    func release() {
+        semaphore.signal()
     }
 }
 

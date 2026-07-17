@@ -35,6 +35,7 @@ final class AppDelegate: NSObject, NSApplicationDelegate {
     private var hoverTimer: Timer?
     private var activity: NSObjectProtocol?
     private var menuBar: MenuBar?
+    private var translationHostWindow: TranslationHostWindowController?
     private let overlayPositionStore = OverlayPositionStore()
     private var cancellables = Set<AnyCancellable>()
 
@@ -102,6 +103,7 @@ final class AppDelegate: NSObject, NSApplicationDelegate {
         menuBar = MenuBar(model: model) { [weak self] in
             self?.resetOverlayPosition()
         }
+        translationHostWindow = TranslationHostWindowController(model: model)
 
         model.start()
 
@@ -160,12 +162,15 @@ final class AppDelegate: NSObject, NSApplicationDelegate {
     private func startHoverTimer() {
         guard hoverTimer == nil else { return }
         updateHoverState()
-        hoverTimer = Timer.scheduledTimer(
-            withTimeInterval: 0.15,
+        let timer = Timer(
+            timeInterval: 0.15,
             repeats: true
         ) { [weak self] _ in
             MainActor.assumeIsolated { self?.updateHoverState() }
         }
+        timer.tolerance = 0.03
+        RunLoop.main.add(timer, forMode: .common)
+        hoverTimer = timer
     }
 
     private func updateHoverState() {

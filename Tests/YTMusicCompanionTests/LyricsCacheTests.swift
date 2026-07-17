@@ -58,4 +58,57 @@ final class LyricsCacheTests: XCTestCase {
         XCTAssertNil(LyricsCache.load("A|One"))
         XCTAssertNil(LyricsCache.load("B|Two"))
     }
+
+    func testSavingIdenticalLyricsDoesNotRewriteTheCacheFile() throws {
+        let lines = [LyricLine(time: 1, text: "same")]
+        LyricsCache.save(lines, for: "A|Same")
+        let file = try XCTUnwrap(cacheFiles().first)
+        let firstModification = try file.resourceValues(
+            forKeys: [.contentModificationDateKey]
+        ).contentModificationDate
+
+        Thread.sleep(forTimeInterval: 0.05)
+        LyricsCache.save(lines, for: "A|Same")
+
+        let secondModification = try file.resourceValues(
+            forKeys: [.contentModificationDateKey]
+        ).contentModificationDate
+        XCTAssertEqual(secondModification, firstModification)
+    }
+
+    func testCorruptEntryIsRemovedAfterAReadFailure() throws {
+        LyricsCache.save([LyricLine(time: 1, text: "valid")], for: "A|Corrupt")
+        let file = try XCTUnwrap(cacheFiles().first)
+        try Data("not json".utf8).write(to: file, options: .atomic)
+
+        XCTAssertNil(LyricsCache.load("A|Corrupt"))
+        XCTAssertTrue(try cacheFiles().isEmpty)
+    }
+
+    func testStatisticsRemainAccurateDuringConcurrentSaves() throws {
+        DispatchQueue.concurrentPerform(iterations: 16) { index in
+            LyricsCache.save(
+                [LyricLine(time: Double(index), text: "line \(index)")],
+                for: "Artist|\(index)"
+            )
+            _ = LyricsCache.statistics()
+        }
+
+        let files = try cacheFiles()
+        let expectedBytes = try files.reduce(0) {
+            $0 + (try $1.resourceValues(forKeys: [.fileSizeKey]).fileSize ?? 0)
+        }
+        XCTAssertEqual(
+            LyricsCache.statistics(),
+            LyricsCacheStatistics(fileCount: files.count, totalBytes: expectedBytes)
+        )
+    }
+
+    private func cacheFiles() throws -> [URL] {
+        guard FileManager.default.fileExists(atPath: tempDir.path) else { return [] }
+        return try FileManager.default.contentsOfDirectory(
+            at: tempDir,
+            includingPropertiesForKeys: [.contentModificationDateKey]
+        )
+    }
 }

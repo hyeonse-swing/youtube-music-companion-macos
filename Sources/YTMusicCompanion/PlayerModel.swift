@@ -386,7 +386,12 @@ final class PlayerModel: ObservableObject {
     }
 
     func stop() {
-        guard isStarted else { return }
+        guard
+            isStarted || pollTimer != nil || tickTimer != nil
+                || pollOperation != nil || metadataOperation != nil
+                || artworkOperation != nil || lyricsOperation != nil
+                || romanizationTask != nil || manualPresenceTimer != nil
+        else { return }
         isStarted = false
         pollTimer?.invalidate()
         pollTimer = nil
@@ -427,9 +432,9 @@ final class PlayerModel: ObservableObject {
             cancellation: cancellation
         )
         pollOperation = operation
-        let task = Task.detached(priority: .utility) {
+        let task = Task.detached(priority: .utility) { [weak self] in
             let nowPlaying = query.query(cancellation: cancellation)
-            await self.finishPoll(
+            await self?.finishPoll(
                 nowPlaying,
                 operationID: operationID,
                 startedAt: startedAt,
@@ -455,35 +460,48 @@ final class PlayerModel: ObservableObject {
 
         let previousTrack = sourceNowPlaying
         apply(source)
-        runtimeDiagnostics.lastPollDate = Date()
-        runtimeDiagnostics.lastPollDuration = Date().timeIntervalSince(startedAt)
+        let finishedAt = Date()
 
         // One transient nil receives one quick recovery poll before the fully idle
         // cadence takes over. This avoids a ten-second gap after a single bridge miss.
         let cadenceTrack = sourceNowPlaying ?? (source == nil ? previousTrack : nil)
-        schedulePoll(after: PlaybackPollingSchedule.interval(for: cadenceTrack))
-        refreshRuntimeDiagnostics()
+        schedulePoll(
+            after: PlaybackPollingSchedule.interval(for: cadenceTrack),
+            lastPollDate: finishedAt,
+            lastPollDuration: finishedAt.timeIntervalSince(startedAt)
+        )
     }
 
-    private func schedulePoll(after interval: TimeInterval) {
+    private func schedulePoll(
+        after interval: TimeInterval,
+        lastPollDate: Date? = nil,
+        lastPollDuration: TimeInterval? = nil
+    ) {
         guard isStarted else { return }
         pollTimer?.invalidate()
         pollTimer = nil
 
         let modeTrack = sourceNowPlaying
-        runtimeDiagnostics.pollMode = PlaybackPollingSchedule.mode(for: modeTrack)
-        runtimeDiagnostics.nextPollInterval = interval
+        refreshRuntimeDiagnostics(
+            pollMode: PlaybackPollingSchedule.mode(for: modeTrack),
+            nextPollInterval: interval,
+            lastPollDate: lastPollDate,
+            lastPollDuration: lastPollDuration
+        )
 
         if interval <= 0 {
             poll()
             return
         }
-        pollTimer = Timer.scheduledTimer(
-            withTimeInterval: interval,
+        let timer = Timer(
+            timeInterval: interval,
             repeats: false
         ) { [weak self] _ in
             MainActor.assumeIsolated { self?.poll() }
         }
+        timer.tolerance = min(0.25, interval * 0.1)
+        RunLoop.main.add(timer, forMode: .common)
+        pollTimer = timer
     }
 
     private func apply(_ source: NowPlaying?) {
@@ -602,9 +620,9 @@ final class PlayerModel: ObservableObject {
             cancellation: cancellation
         )
         metadataOperation = operation
-        let task = Task.detached(priority: .utility) {
+        let task = Task.detached(priority: .utility) { [weak self] in
             let metadata = resolver.resolve(for: source, cancellation: cancellation)
-            await self.finishMetadataResolution(
+            await self?.finishMetadataResolution(
                 metadata,
                 sourceKey: sourceKey,
                 operationID: operationID,
@@ -731,9 +749,9 @@ final class PlayerModel: ObservableObject {
             cancellation: cancellation
         )
         artworkOperation = operation
-        let task = Task.detached(priority: .utility) {
+        let task = Task.detached(priority: .utility) { [weak self] in
             let artwork = query.query(cancellation: cancellation)
-            await self.finishArtworkLoad(
+            await self?.finishArtworkLoad(
                 artwork,
                 sourceKey: sourceKey,
                 operationID: operationID,
@@ -845,12 +863,12 @@ final class PlayerModel: ObservableObject {
             cancellation: cancellation
         )
         lyricsOperation = operation
-        let task = Task.detached(priority: .userInitiated) {
+        let task = Task.detached(priority: .userInitiated) { [weak self] in
             let fetched = LRCLIB.fetchCandidates(
                 for: track,
                 cancellation: cancellation
             )
-            await self.finishLyricCandidates(
+            await self?.finishLyricCandidates(
                 fetched,
                 cacheKey: cacheKey,
                 operationID: operationID,
@@ -1137,11 +1155,12 @@ final class PlayerModel: ObservableObject {
 
     private func scheduleManualPresenceExpiry(for session: ManualDiscordPresenceSession) {
         manualPresenceTimer?.invalidate()
-        manualPresenceTimer = Timer.scheduledTimer(
-            withTimeInterval: max(0.1, session.expiresAt.timeIntervalSinceNow),
+        let interval = max(0.1, session.expiresAt.timeIntervalSinceNow)
+        let timer = Timer(
+            timeInterval: interval,
             repeats: false
         ) { [weak self] _ in
-            Task { @MainActor in
+            MainActor.assumeIsolated {
                 guard self?.manualDiscordPresenceSession?.sessionKey == session.sessionKey
                 else {
                     return
@@ -1149,6 +1168,9 @@ final class PlayerModel: ObservableObject {
                 self?.returnToLiveDiscordPresence()
             }
         }
+        timer.tolerance = min(1, interval * 0.01)
+        RunLoop.main.add(timer, forMode: .common)
+        manualPresenceTimer = timer
     }
 
     private func isDiscordTrackPrivate(_ track: NowPlaying) -> Bool {
@@ -1186,12 +1208,15 @@ final class PlayerModel: ObservableObject {
         }
         let shouldTick = overlayEnabled && isPlaying && !lines.isEmpty
         if shouldTick, tickTimer == nil {
-            tickTimer = Timer.scheduledTimer(
-                withTimeInterval: 0.08,
+            let timer = Timer(
+                timeInterval: 0.08,
                 repeats: true
             ) { [weak self] _ in
                 MainActor.assumeIsolated { self?.tick() }
             }
+            timer.tolerance = 0.012
+            RunLoop.main.add(timer, forMode: .common)
+            tickTimer = timer
             tick()
         } else if !shouldTick {
             tickTimer?.invalidate()
@@ -1284,7 +1309,8 @@ final class PlayerModel: ObservableObject {
         }
 
         let target = translationTargetLanguage.resolvedIdentifier
-        if sourceLanguageMatchesTarget(target) {
+        let source = LyricRomanizer.detectedLanguage(in: lines)?.rawValue
+        if let source, sourceLanguageMatchesTarget(source, target) {
             lyricTranslationStatus = .ready
             return
         }
@@ -1303,18 +1329,27 @@ final class PlayerModel: ObservableObject {
         lyricTranslationRequest = LyricTranslationRequest(
             id: UUID(),
             trackKey: trackKey,
+            sourceLanguage: source,
             targetLanguage: target,
             tone: translationTone,
             sourceLines: lines
         )
     }
 
-    private func sourceLanguageMatchesTarget(_ target: String) -> Bool {
-        guard let source = LyricRomanizer.detectedLanguage(in: lines)?.rawValue
-        else { return false }
+    private func sourceLanguageMatchesTarget(_ source: String, _ target: String) -> Bool {
         let sourceCode = source.split(separator: "-").first?.lowercased()
         let targetCode = target.split(separator: "-").first?.lowercased()
         return sourceCode == targetCode
+    }
+
+    func failLyricTranslation(
+        request: LyricTranslationRequest,
+        message: String
+    ) {
+        guard request == lyricTranslationRequest else { return }
+        lyricTranslationStatus = .failed(message)
+        lyricTranslationRequest = nil
+        refreshRuntimeDiagnostics()
     }
 
     @available(macOS 15.0, *)
@@ -1419,7 +1454,12 @@ final class PlayerModel: ObservableObject {
         translationDiskCacheStatistics = statistics
     }
 
-    private func refreshRuntimeDiagnostics() {
+    private func refreshRuntimeDiagnostics(
+        pollMode: PlaybackPollMode? = nil,
+        nextPollInterval: TimeInterval? = nil,
+        lastPollDate: Date? = nil,
+        lastPollDuration: TimeInterval? = nil
+    ) {
         var activeOperations: [String] = []
         if pollOperation != nil { activeOperations.append("Now Playing") }
         if metadataOperation != nil { activeOperations.append("Metadata") }
@@ -1428,13 +1468,29 @@ final class PlayerModel: ObservableObject {
         if romanizationTask != nil { activeOperations.append("Romanization") }
         if lyricTranslationRequest != nil { activeOperations.append("Translation") }
 
-        runtimeDiagnostics.activeOperations = activeOperations
-        runtimeDiagnostics.subprocesses = SubprocessRunner.metrics
-        runtimeDiagnostics.metadataCacheEntries = metadataCache.count
-        runtimeDiagnostics.artworkCacheEntries = artworkCache.count
-        runtimeDiagnostics.lyricsCacheEntries = lyricsCache.count
-        runtimeDiagnostics.lyricCandidateCacheEntries = lyricCandidateCache.count
-        runtimeDiagnostics.discordStatus = discordConnectionStatus
+        var next = runtimeDiagnostics
+        if let pollMode {
+            next.pollMode = pollMode
+        }
+        if let nextPollInterval {
+            next.nextPollInterval = nextPollInterval
+        }
+        if let lastPollDate {
+            next.lastPollDate = lastPollDate
+        }
+        if let lastPollDuration {
+            next.lastPollDuration = lastPollDuration
+        }
+        next.activeOperations = activeOperations
+        next.subprocesses = SubprocessRunner.metrics
+        next.metadataCacheEntries = metadataCache.count
+        next.artworkCacheEntries = artworkCache.count
+        next.lyricsCacheEntries = lyricsCache.count
+        next.lyricCandidateCacheEntries = lyricCandidateCache.count
+        next.discordStatus = discordConnectionStatus
+        if next != runtimeDiagnostics {
+            runtimeDiagnostics = next
+        }
     }
 
     private func clampedElapsed(_ elapsed: Double, duration: Double) -> Double {

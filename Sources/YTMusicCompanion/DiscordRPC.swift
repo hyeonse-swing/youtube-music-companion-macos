@@ -365,11 +365,24 @@ final class DiscordRPC: PresencePublishing {
     /// would emit invalid UTF-8). Then pad a too-short value (< 2 bytes) with a trailing
     /// space so it satisfies the 2-byte minimum.
     private static func clamp(_ s: String) -> String {
-        var capped = s
-        while capped.utf8.count > 128 {
-            capped.removeLast()   // drop a whole Character, never a partial scalar
+        var capped: String
+        if s.utf8.count <= 128 {
+            capped = s
+        } else {
+            var byteCount = 0
+            var end = s.startIndex
+            while end < s.endIndex {
+                let next = s.index(after: end)
+                let characterByteCount = s[end..<next].utf8.count
+                guard byteCount + characterByteCount <= 128 else { break }
+                byteCount += characterByteCount
+                end = next
+            }
+            capped = String(s[..<end])
         }
-        if capped.utf8.count < 2 { capped += " " }
+        while capped.utf8.count < 2 {
+            capped.append(" ")
+        }
         return capped
     }
 

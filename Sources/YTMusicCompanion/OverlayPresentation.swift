@@ -99,7 +99,16 @@ enum LyricKaraokeTimeline {
     }
 
     static func highlightedCharacterCount(in text: String, progress: Double) -> Int {
-        let characterCount = text.count
+        highlightedCharacterCount(
+            characterCount: text.count,
+            progress: progress
+        )
+    }
+
+    static func highlightedCharacterCount(
+        characterCount: Int,
+        progress: Double
+    ) -> Int {
         guard characterCount > 0 else { return 0 }
         let clampedProgress = min(1, max(0, progress))
         return min(

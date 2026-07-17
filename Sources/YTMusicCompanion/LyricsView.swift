@@ -5,17 +5,12 @@ import SwiftUI
 struct LyricsView: View {
     @EnvironmentObject var model: PlayerModel
 
-    // Tweak these to restyle. design: .default (SF Pro) reads cleaner than .rounded;
-    // try .serif (New York) for a classier look or .monospaced for something techy.
-    private let fontDesign: Font.Design = .default
-
     var body: some View {
         content
             .frame(maxWidth: .infinity, maxHeight: .infinity)
             .opacity(model.isHovering ? 1.0 : 0.62)
             .animation(.easeInOut(duration: 0.25), value: model.isHovering)
             .overlay(alignment: .bottom) { if model.isHovering { syncReadout } }
-            .background { LyricTranslationCoordinator(model: model) }
     }
 
     /// Sync calibration HUD, shown only while hovering: scroll to adjust.
@@ -80,76 +75,18 @@ struct LyricsView: View {
     }
 
     private func lineView(idx: Int, line: LyricLine, fontSize: CGFloat) -> some View {
-        let cur = model.currentIndex   // -1 = not started → no line is "current" yet
-        let isCurrent = idx == cur
-        let d = abs(idx - cur)
-
-        // Current line + 1 neighbour each side; everything further is hidden.
-        let opacity: Double = isCurrent
-            ? 1
-            : (d == 1 ? model.overlayPreset.neighborOpacity : 0)
-        let blur: Double = isCurrent
-            ? 0
-            : (d == 1 ? model.overlayPreset.neighborBlur : 0)
-        // Size difference via scaleEffect (a smooth transform), NOT font size —
-        // changing the font size re-lays-out and re-rasterises the text, which
-        // pops instead of animating (very visible with CJK / Korean glyphs).
-        let scale = isCurrent
-            ? 1.0
-            : model.overlayPreset.neighborScale
-
-        return VStack(spacing: OverlayStyle.layerSpacing(fontSize)) {
-            if isCurrent, model.karaokeModeEnabled, !line.text.isEmpty {
-                KaraokeProgressText(
-                    model: model,
-                    lineIndex: idx,
-                    text: line.text,
-                    fontSize: fontSize,
-                    fontDesign: fontDesign
-                )
-            } else {
-                Text(line.text.isEmpty ? "♪" : line.text)
-                    .font(.system(size: fontSize, weight: .bold, design: fontDesign))
-                    .foregroundStyle(.white)
-                    .lineLimit(1)
-                    .minimumScaleFactor(0.45)
-            }
-
-            if let romanized = model.romanizedText(at: idx) {
-                Text(romanized)
-                    .font(
-                        .system(
-                            size: OverlayStyle.romanizedFontSize(fontSize),
-                            weight: .medium,
-                            design: fontDesign
-                        )
-                    )
-                    .foregroundStyle(.white.opacity(0.82))
-                    .lineLimit(1)
-                    .minimumScaleFactor(0.55)
-            }
-
-            if let translated = model.translatedText(at: idx) {
-                Text(translated)
-                    .font(
-                        .system(
-                            size: OverlayStyle.translatedFontSize(fontSize),
-                            weight: .regular,
-                            design: fontDesign
-                        )
-                    )
-                    .foregroundStyle(.white.opacity(0.72))
-                    .lineLimit(1)
-                    .minimumScaleFactor(0.55)
-            }
-        }
-            .frame(maxWidth: .infinity)
-            .padding(.horizontal, OverlayStyle.horizontalPadding)
-            .opacity(opacity)
-            .blur(radius: blur)
-            .scaleEffect(scale, anchor: .center)
-            .shadow(color: .black.opacity(0.65), radius: 5, y: 1)
-            .animation(.spring(response: 0.4, dampingFraction: 0.85), value: model.currentIndex)
+        LyricLineRow(
+            model: model,
+            lineIndex: idx,
+            currentIndex: model.currentIndex,
+            text: line.text,
+            romanizedText: model.romanizedText(at: idx),
+            translatedText: model.translatedText(at: idx),
+            fontSize: fontSize,
+            preset: model.overlayPreset,
+            karaokeModeEnabled: model.karaokeModeEnabled
+        )
+        .equatable()
     }
 
     /// Subtle "looking up lyrics" hint — three faint dots, no text.
@@ -180,14 +117,130 @@ struct LyricsView: View {
     }
 }
 
+/// Keeps static lyric rows out of SwiftUI's update path when unrelated
+/// `PlayerModel` publications (metadata, diagnostics, artwork) arrive.
+private struct LyricLineRow: View, Equatable {
+    let model: PlayerModel
+    let lineIndex: Int
+    let currentIndex: Int
+    let text: String
+    let romanizedText: String?
+    let translatedText: String?
+    let fontSize: CGFloat
+    let preset: OverlayPreset
+    let karaokeModeEnabled: Bool
+
+    // Tweak this to restyle. `.default` (SF Pro) reads cleaner than `.rounded`;
+    // `.serif` (New York) is classier and `.monospaced` feels more technical.
+    private let fontDesign: Font.Design = .default
+
+    static func == (lhs: Self, rhs: Self) -> Bool {
+        lhs.model === rhs.model
+            && lhs.lineIndex == rhs.lineIndex
+            && lhs.currentIndex == rhs.currentIndex
+            && lhs.text == rhs.text
+            && lhs.romanizedText == rhs.romanizedText
+            && lhs.translatedText == rhs.translatedText
+            && lhs.fontSize == rhs.fontSize
+            && lhs.preset == rhs.preset
+            && lhs.karaokeModeEnabled == rhs.karaokeModeEnabled
+    }
+
+    var body: some View {
+        let isCurrent = lineIndex == currentIndex
+        let distance = abs(lineIndex - currentIndex)
+
+        // Current line + 1 neighbour each side; everything further is hidden.
+        let opacity: Double = isCurrent
+            ? 1
+            : (distance == 1 ? preset.neighborOpacity : 0)
+        let blur: Double = isCurrent
+            ? 0
+            : (distance == 1 ? preset.neighborBlur : 0)
+        // Size difference via scaleEffect (a smooth transform), NOT font size —
+        // changing the font size re-lays-out and re-rasterises the text, which
+        // pops instead of animating (very visible with CJK / Korean glyphs).
+        let scale = isCurrent ? 1.0 : preset.neighborScale
+
+        VStack(spacing: OverlayStyle.layerSpacing(fontSize)) {
+            if isCurrent, karaokeModeEnabled, !text.isEmpty {
+                KaraokeProgressText(
+                    model: model,
+                    lineIndex: lineIndex,
+                    text: text,
+                    fontSize: fontSize,
+                    fontDesign: fontDesign
+                )
+            } else {
+                Text(text.isEmpty ? "♪" : text)
+                    .font(.system(size: fontSize, weight: .bold, design: fontDesign))
+                    .foregroundStyle(.white)
+                    .lineLimit(1)
+                    .minimumScaleFactor(0.45)
+            }
+
+            if let romanizedText {
+                Text(romanizedText)
+                    .font(
+                        .system(
+                            size: OverlayStyle.romanizedFontSize(fontSize),
+                            weight: .medium,
+                            design: fontDesign
+                        )
+                    )
+                    .foregroundStyle(.white.opacity(0.82))
+                    .lineLimit(1)
+                    .minimumScaleFactor(0.55)
+            }
+
+            if let translatedText {
+                Text(translatedText)
+                    .font(
+                        .system(
+                            size: OverlayStyle.translatedFontSize(fontSize),
+                            weight: .regular,
+                            design: fontDesign
+                        )
+                    )
+                    .foregroundStyle(.white.opacity(0.72))
+                    .lineLimit(1)
+                    .minimumScaleFactor(0.55)
+            }
+        }
+        .frame(maxWidth: .infinity)
+        .padding(.horizontal, OverlayStyle.horizontalPadding)
+        .opacity(opacity)
+        .blur(radius: blur)
+        .scaleEffect(scale, anchor: .center)
+        .shadow(color: .black.opacity(0.65), radius: 5, y: 1)
+        .animation(.spring(response: 0.4, dampingFraction: 0.85), value: currentIndex)
+    }
+}
+
 private struct KaraokeProgressText: View {
-    @ObservedObject var model: PlayerModel
+    let model: PlayerModel
     @Environment(\.accessibilityReduceMotion) private var reduceMotion
 
     let lineIndex: Int
     let text: String
     let fontSize: CGFloat
     let fontDesign: Font.Design
+    private let characterCount: Int
+
+    init(
+        model: PlayerModel,
+        lineIndex: Int,
+        text: String,
+        fontSize: CGFloat,
+        fontDesign: Font.Design
+    ) {
+        self.model = model
+        self.lineIndex = lineIndex
+        self.text = text
+        self.fontSize = fontSize
+        self.fontDesign = fontDesign
+        characterCount = text.count
+    }
 
     var body: some View {
         if reduceMotion {
@@ -217,12 +270,23 @@ private struct KaraokeProgressText: View {
 
     private func highlightedText(progress: Double) -> AttributedString {
         let highlightedCount = LyricKaraokeTimeline.highlightedCharacterCount(
-            in: text,
+            characterCount: characterCount,
             progress: progress
         )
-        var highlighted = AttributedString(String(text.prefix(highlightedCount)))
+        var completeText = AttributedString(text)
+        guard highlightedCount > 0 else {
+            completeText.foregroundColor = .white.opacity(0.42)
+            return completeText
+        }
+        guard highlightedCount < characterCount else {
+            completeText.foregroundColor = .white
+            return completeText
+        }
+
+        let splitIndex = text.index(text.startIndex, offsetBy: highlightedCount)
+        var highlighted = AttributedString(text[..<splitIndex])
         highlighted.foregroundColor = .white
-        var upcoming = AttributedString(String(text.dropFirst(highlightedCount)))
+        var upcoming = AttributedString(text[splitIndex...])
         upcoming.foregroundColor = .white.opacity(0.42)
         highlighted.append(upcoming)
         return highlighted

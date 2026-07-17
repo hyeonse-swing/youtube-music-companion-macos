@@ -56,6 +56,34 @@ final class CancellationTokenTests: XCTestCase {
         XCTAssertLessThan(Date().timeIntervalSince(startedAt), 2)
         XCTAssertTrue(lock.withLock { result?.wasCancelled ?? token.isCancelled })
     }
+
+    func testSubprocessOutputIsBounded() throws {
+        let result = try XCTUnwrap(SubprocessRunner.run(
+            executable: "/usr/bin/yes",
+            arguments: [],
+            timeout: 2,
+            maximumOutputBytes: 1_024,
+            cancellation: CancellationToken()
+        ))
+
+        XCTAssertEqual(result.output.count, 1_024)
+        XCTAssertTrue(result.outputLimitExceeded)
+        XCTAssertFalse(result.succeeded)
+    }
+
+    func testFastExitingProcessWithClippedOutputNeverSucceeds() throws {
+        let result = try XCTUnwrap(SubprocessRunner.run(
+            executable: "/usr/bin/head",
+            arguments: ["-c", "4096", "/dev/zero"],
+            timeout: 2,
+            maximumOutputBytes: 1_024,
+            cancellation: CancellationToken()
+        ))
+
+        XCTAssertEqual(result.output.count, 1_024)
+        XCTAssertTrue(result.outputLimitExceeded)
+        XCTAssertFalse(result.succeeded)
+    }
 }
 
 private final class LockedCounter: @unchecked Sendable {

@@ -6,8 +6,12 @@ import Foundation
 enum LyricTranslationCache {
     private static let maximumFileCount = 500
     private static let maximumTotalBytes = 25 * 1_024 * 1_024
+    private static let statisticsLock = NSLock()
+    private static var cachedStatistics: LyricsCacheStatistics?
 
-    static var overrideDirectory: URL?
+    static var overrideDirectory: URL? {
+        didSet { invalidateStatistics() }
+    }
 
     private struct Entry: Codable {
         let sourceFingerprint: String
@@ -43,13 +47,22 @@ enum LyricTranslationCache {
                 targetLanguage: targetLanguage,
                 tone: tone
             ),
-            let data = try? Data(contentsOf: url),
+            let data = try? Data(contentsOf: url)
+        else { return nil }
+
+        guard
             let entry = try? JSONDecoder().decode(Entry.self, from: data),
             entry.targetLanguage == targetLanguage,
             entry.tone == tone.rawValue,
             entry.sourceFingerprint == fingerprint(sourceLines),
             entry.translations.count == sourceLines.count
-        else { return nil }
+        else {
+            statisticsLock.withLock {
+                try? FileManager.default.removeItem(at: url)
+                cachedStatistics = nil
+            }
+            return nil
+        }
         return entry.translations
     }
 
@@ -73,21 +86,41 @@ enum LyricTranslationCache {
             tone: tone.rawValue,
             translations: translations
         )
-        guard let data = try? JSONEncoder().encode(entry) else { return }
-        try? data.write(to: url, options: .atomic)
-        pruneIfNeeded()
+        guard let data = encodedData(entry) else { return }
+        if let existing = try? Data(contentsOf: url), existing == data {
+            return
+        }
+        do {
+            try data.write(to: url, options: .atomic)
+        } catch {
+            return
+        }
+        statisticsLock.withLock {
+            cachedStatistics = nil
+            pruneIfNeededLocked()
+        }
     }
 
     static func clear() {
-        cachedFiles().forEach { try? FileManager.default.removeItem(at: $0.url) }
+        statisticsLock.withLock {
+            cachedFiles().forEach { try? FileManager.default.removeItem(at: $0.url) }
+            cachedStatistics = nil
+        }
     }
 
     static func statistics() -> LyricsCacheStatistics {
-        let files = cachedFiles()
-        return LyricsCacheStatistics(
-            fileCount: files.count,
-            totalBytes: files.reduce(0) { $0 + $1.size }
-        )
+        statisticsLock.withLock {
+            if let cachedStatistics {
+                return cachedStatistics
+            }
+            let files = cachedFiles()
+            let statistics = LyricsCacheStatistics(
+                fileCount: files.count,
+                totalBytes: files.reduce(0) { $0 + $1.size }
+            )
+            cachedStatistics = statistics
+            return statistics
+        }
     }
 
     private static func directory() -> URL? {
@@ -112,7 +145,7 @@ enum LyricTranslationCache {
     }
 
     private static func fingerprint(_ lines: [LyricLine]) -> String {
-        guard let data = try? JSONEncoder().encode(lines) else { return "" }
+        guard let data = encodedData(lines) else { return "" }
         return hexDigest(data)
     }
 
@@ -152,13 +185,49 @@ enum LyricTranslationCache {
         }
     }
 
-    private static func pruneIfNeeded() {
-        var files = cachedFiles().sorted { $0.modifiedAt < $1.modifiedAt }
+    /// Caller must hold `statisticsLock` so an older directory scan cannot
+    /// overwrite statistics produced by a newer save or clear.
+    private static func pruneIfNeededLocked() {
+        var files = cachedFiles()
         var totalBytes = files.reduce(0) { $0 + $1.size }
-        while files.count > maximumFileCount || totalBytes > maximumTotalBytes {
-            let oldest = files.removeFirst()
-            try? FileManager.default.removeItem(at: oldest.url)
-            totalBytes = max(0, totalBytes - oldest.size)
+        guard files.count > maximumFileCount || totalBytes > maximumTotalBytes else {
+            cachedStatistics = LyricsCacheStatistics(
+                fileCount: files.count,
+                totalBytes: totalBytes
+            )
+            return
         }
+
+        files.sort { $0.modifiedAt < $1.modifiedAt }
+        var remainingFileCount = files.count
+        var index = 0
+        while
+            (remainingFileCount > maximumFileCount || totalBytes > maximumTotalBytes),
+            index < files.count
+        {
+            let oldest = files[index]
+            index += 1
+            do {
+                try FileManager.default.removeItem(at: oldest.url)
+                remainingFileCount -= 1
+                totalBytes = max(0, totalBytes - oldest.size)
+            } catch {
+                continue
+            }
+        }
+        cachedStatistics = LyricsCacheStatistics(
+            fileCount: remainingFileCount,
+            totalBytes: totalBytes
+        )
+    }
+
+    private static func invalidateStatistics() {
+        statisticsLock.withLock { cachedStatistics = nil }
+    }
+
+    private static func encodedData<T: Encodable>(_ value: T) -> Data? {
+        let encoder = JSONEncoder()
+        encoder.outputFormatting = [.sortedKeys]
+        return try? encoder.encode(value)
     }
 }
