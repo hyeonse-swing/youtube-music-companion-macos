@@ -32,6 +32,7 @@ struct AppInformation: Equatable {
 private struct AppInformationView: View {
     let information: AppInformation
     let appIcon: NSImage
+    let language: AppLanguage
     let close: () -> Void
 
     var body: some View {
@@ -46,7 +47,14 @@ private struct AppInformationView: View {
                 VStack(alignment: .leading, spacing: 3) {
                     Text(AppConfiguration.productName)
                         .font(.title2.weight(.semibold))
-                    Text(information.versionText)
+                    Text(
+                        AppLocalization.format(
+                            "Version %@ (%@)",
+                            language: language,
+                            arguments: information.version,
+                            information.build
+                        )
+                    )
                         .foregroundStyle(.secondary)
                 }
             }
@@ -55,17 +63,20 @@ private struct AppInformationView: View {
 
             Grid(alignment: .leading, horizontalSpacing: 18, verticalSpacing: 12) {
                 GridRow {
-                    Text("Discord")
+                    Text(AppLocalization.string("Discord", language: language))
                         .foregroundStyle(.secondary)
                     Label(
-                        information.discordStatus,
+                        AppLocalization.string(
+                            information.discordStatus,
+                            language: language
+                        ),
                         systemImage: information.isDiscordConfigured
                             ? "checkmark.circle.fill"
                             : "exclamationmark.circle"
                     )
                 }
                 GridRow {
-                    Text("Bundle ID")
+                    Text(AppLocalization.string("Bundle ID", language: language))
                         .foregroundStyle(.secondary)
                     Text(information.bundleIdentifier)
                         .textSelection(.enabled)
@@ -76,10 +87,16 @@ private struct AppInformationView: View {
 
             HStack {
                 if let repositoryURL = URL(string: AppConfiguration.repositoryURL) {
-                    Link("View on GitHub", destination: repositoryURL)
+                    Link(
+                        AppLocalization.string("View on GitHub", language: language),
+                        destination: repositoryURL
+                    )
                 }
                 Spacer()
-                Button("Done", action: close)
+                Button(
+                    AppLocalization.string("Done", language: language),
+                    action: close
+                )
                     .keyboardShortcut(.defaultAction)
             }
 
@@ -90,12 +107,19 @@ private struct AppInformationView: View {
         }
         .padding(24)
         .frame(width: 440)
+        .environment(\.locale, language.locale)
     }
 }
 
 @MainActor
 final class AppInformationWindowController: NSWindowController {
-    init(information: AppInformation = .current()) {
+    private let information: AppInformation
+
+    init(
+        information: AppInformation = .current(),
+        language: AppLanguage = .system
+    ) {
+        self.information = information
         let panel = NSPanel(
             contentRect: NSRect(x: 0, y: 0, width: 440, height: 310),
             styleMask: [.titled, .closable],
@@ -104,7 +128,11 @@ final class AppInformationWindowController: NSWindowController {
         )
         super.init(window: panel)
 
-        panel.title = "About \(AppConfiguration.productName)"
+        panel.title = AppLocalization.format(
+            "About %@",
+            language: language,
+            arguments: AppConfiguration.productName
+        )
         panel.isFloatingPanel = true
         panel.isReleasedWhenClosed = false
         panel.level = .floating
@@ -114,6 +142,7 @@ final class AppInformationWindowController: NSWindowController {
         panel.contentView = NSHostingView(rootView: AppInformationView(
             information: information,
             appIcon: NSApp.applicationIconImage ?? NSImage(size: NSSize(width: 64, height: 64)),
+            language: language,
             close: { [weak panel] in panel?.close() }
         ))
         panel.setContentSize(panel.contentView?.fittingSize ?? NSSize(width: 440, height: 310))
@@ -124,11 +153,31 @@ final class AppInformationWindowController: NSWindowController {
         fatalError("init(coder:) is unavailable")
     }
 
-    func show() {
+    func show(language: AppLanguage = .system) {
+        update(language: language)
         NSApp.activate()
         centerOnPrimaryDisplay()
         window?.makeKeyAndOrderFront(nil)
         window?.orderFrontRegardless()
+    }
+
+    private func update(language: AppLanguage) {
+        guard let panel = window else { return }
+        panel.title = AppLocalization.format(
+            "About %@",
+            language: language,
+            arguments: AppConfiguration.productName
+        )
+        panel.contentView = NSHostingView(rootView: AppInformationView(
+            information: information,
+            appIcon: NSApp.applicationIconImage
+                ?? NSImage(size: NSSize(width: 64, height: 64)),
+            language: language,
+            close: { [weak panel] in panel?.close() }
+        ))
+        panel.setContentSize(
+            panel.contentView?.fittingSize ?? NSSize(width: 440, height: 310)
+        )
     }
 
     private func centerOnPrimaryDisplay() {

@@ -141,6 +141,13 @@ final class PlayerModel: ObservableObject {
         }
     }
 
+    @Published var appLanguage: AppLanguage {
+        didSet {
+            guard appLanguage != oldValue else { return }
+            preferences.appLanguage = appLanguage
+        }
+    }
+
     @Published var displayMetadataSource: MetadataSourcePreference {
         didSet {
             guard displayMetadataSource != oldValue else { return }
@@ -172,7 +179,12 @@ final class PlayerModel: ObservableObject {
 
     /// Menubar status-row text: the current track, or a "Nothing playing" idle state.
     var nowPlayingDescription: String {
-        guard let currentTrack else { return "No YouTube Music playing" }
+        guard let currentTrack else {
+            return AppLocalization.string(
+                "No YouTube Music playing",
+                language: appLanguage
+            )
+        }
         return currentTrack
     }
 
@@ -355,6 +367,7 @@ final class PlayerModel: ObservableObject {
         showsTranslatedLyrics = preferences.showsTranslatedLyrics
         translationTargetLanguage = preferences.translationTargetLanguage
         translationTone = preferences.translationTone
+        appLanguage = preferences.appLanguage
         displayMetadataSource = preferences.displayMetadataSource
         discordMetadataSource = preferences.discordMetadataSource
         discordPresenceConfiguration = preferences.discordPresenceConfiguration

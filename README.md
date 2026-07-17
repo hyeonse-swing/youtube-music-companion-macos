@@ -14,6 +14,8 @@ A focused macOS menu-bar app for the installed YouTube Music web app. It:
   language-aware behavior, not a Japanese-only mode.
 - Lets you choose lyric versions, lyric size, layered-lyric options, timing resets,
   and separate metadata sources for the app and Discord from a native **Settings** panel.
+- Follows the supported macOS interface language by default and lets you switch
+  the app independently between Korean and English without relaunching.
 - Includes Balanced, Focused, Compact, and Stage overlay presets plus an optional
   lightweight karaoke line-progress highlight.
 - Lets you pin a local UTF-8 `.lrc` file to the current song, export the active
@@ -45,6 +47,9 @@ version, build number, Discord configuration status, bundle identifier, and proj
   adjustments, selects an LRCLIB result per song, configures original/romanized/
   translated lyric layers, and independently chooses YouTube Music screen metadata
   or macOS playback metadata for the app and Discord.
+- The **General** tab selects **System Default**, **한국어**, or **English**.
+  Interface changes apply immediately and are independent from the lyric
+  translation target.
 - The **Appearance** section applies an overlay preset and its recommended type
   size in one action. Karaoke progress estimates left-to-right character timing
   from each LRC line timestamp because standard LRC files do not provide word timing.
@@ -169,6 +174,8 @@ DISCORD_CLIENT_ID=your_application_id .build/debug/YTMusicCompanion --discord
   timing for the optional karaoke highlight.
 - `CompanionPreferences.swift` / `SettingsWindow.swift`: persisted user choices and
   a lazily-created native settings interface whose inactive sections are not rendered.
+- `AppLanguage.swift` / localized resources: supported-language resolution,
+  persisted overrides, and live Korean/English interface strings.
 - `NowPlayingPanel.swift`: native current-track and playback-progress panel.
 - `OverlayPositionStore.swift`: persistent, display-safe overlay positioning.
 

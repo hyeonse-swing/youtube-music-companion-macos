@@ -24,36 +24,87 @@ final class MenuBar: NSObject, NSMenuDelegate {
     private let exactMetadataItem: NSMenuItem
     private let showOverlayItem: NSMenuItem
     private let discordItem: NSMenuItem
+    private let resetOverlayItem: NSMenuItem
+    private let settingsItem: NSMenuItem
+    private let quitItem: NSMenuItem
+    private let aboutItem: NSMenuItem
 
     init(model: PlayerModel, resetOverlayPosition: @escaping () -> Void) {
         self.model = model
         self.resetOverlayPosition = resetOverlayPosition
         statusItem = NSStatusBar.system.statusItem(withLength: NSStatusItem.variableLength)
 
-        nowPlayingItem = NSMenuItem(title: "No YouTube Music playing", action: nil, keyEquivalent: "")
+        nowPlayingItem = NSMenuItem(
+            title: AppLocalization.string(
+                "No YouTube Music playing",
+                language: model.appLanguage
+            ),
+            action: nil,
+            keyEquivalent: ""
+        )
         nowPlayingItem.isEnabled = false
 
         showNowPlayingItem = NSMenuItem(
-            title: "Show Now Playing…",
+            title: AppLocalization.string(
+                "Show Now Playing…",
+                language: model.appLanguage
+            ),
             action: #selector(showNowPlaying(_:)),
             keyEquivalent: ""
         )
 
         exactMetadataItem = NSMenuItem(
-            title: "Enable Exact YouTube Music Metadata…",
+            title: AppLocalization.string(
+                "Enable Exact YouTube Music Metadata…",
+                language: model.appLanguage
+            ),
             action: #selector(requestExactMetadataAccess(_:)),
             keyEquivalent: ""
         )
 
         showOverlayItem = NSMenuItem(
-            title: "Show Overlay",
+            title: AppLocalization.string("Show Overlay", language: model.appLanguage),
             action: #selector(toggleOverlay(_:)),
             keyEquivalent: ""
         )
 
         discordItem = NSMenuItem(
-            title: "Discord Rich Presence",
+            title: AppLocalization.string(
+                "Discord Rich Presence",
+                language: model.appLanguage
+            ),
             action: #selector(toggleDiscord(_:)),
+            keyEquivalent: ""
+        )
+
+        resetOverlayItem = NSMenuItem(
+            title: AppLocalization.string(
+                "Reset Overlay Position",
+                language: model.appLanguage
+            ),
+            action: #selector(resetLyricsPosition(_:)),
+            keyEquivalent: ""
+        )
+
+        settingsItem = NSMenuItem(
+            title: AppLocalization.string("Settings…", language: model.appLanguage),
+            action: #selector(showSettings(_:)),
+            keyEquivalent: ","
+        )
+
+        quitItem = NSMenuItem(
+            title: AppLocalization.string("Quit", language: model.appLanguage),
+            action: #selector(quit(_:)),
+            keyEquivalent: "q"
+        )
+
+        aboutItem = NSMenuItem(
+            title: AppLocalization.format(
+                "About %@…",
+                language: model.appLanguage,
+                arguments: AppConfiguration.productName
+            ),
+            action: #selector(showAbout(_:)),
             keyEquivalent: ""
         )
 
@@ -80,43 +131,16 @@ final class MenuBar: NSObject, NSMenuDelegate {
 
         discordItem.target = self
         discordItem.isEnabled = model.isDiscordConfigured
-        if !model.isDiscordConfigured {
-            discordItem.title = "Discord Rich Presence (Not Configured)"
-        }
         discordItem.state = model.discordEnabled ? .on : .off
 
         showNowPlayingItem.target = self
         showNowPlayingItem.isEnabled = model.hasNowPlaying
         exactMetadataItem.target = self
-        updateExactMetadataItem()
-
-        let resetOverlayItem = NSMenuItem(
-            title: "Reset Overlay Position",
-            action: #selector(resetLyricsPosition(_:)),
-            keyEquivalent: ""
-        )
         resetOverlayItem.target = self
-
-        let settingsItem = NSMenuItem(
-            title: "Settings…",
-            action: #selector(showSettings(_:)),
-            keyEquivalent: ","
-        )
         settingsItem.target = self
-
-        let quitItem = NSMenuItem(
-            title: "Quit",
-            action: #selector(quit(_:)),
-            keyEquivalent: "q"
-        )
         quitItem.target = self
-
-        let aboutItem = NSMenuItem(
-            title: "About \(AppConfiguration.productName)…",
-            action: #selector(showAbout(_:)),
-            keyEquivalent: ""
-        )
         aboutItem.target = self
+        updateLocalizedTitles()
 
         menu.addItem(nowPlayingItem)
         menu.addItem(.separator())
@@ -136,15 +160,15 @@ final class MenuBar: NSObject, NSMenuDelegate {
     /// Refresh the now-playing row and toggle state right before the menu opens —
     /// cheaper than a continuous loop, and the menu is the only place they're seen.
     func menuNeedsUpdate(_ menu: NSMenu) {
+        updateLocalizedTitles()
         nowPlayingItem.title = model.nowPlayingDescription
         showNowPlayingItem.isEnabled = model.hasNowPlaying
-        updateExactMetadataItem()
         showOverlayItem.state = model.overlayEnabled ? .on : .off
         discordItem.state = model.discordEnabled ? .on : .off
     }
 
     func showAppInformation() {
-        appInformationWindow.show()
+        appInformationWindow.show(language: model.appLanguage)
     }
 
     func showNowPlayingPanel() {
@@ -212,11 +236,50 @@ final class MenuBar: NSObject, NSMenuDelegate {
 
     private func updateExactMetadataItem() {
         if model.hasExactMetadataAccess {
-            exactMetadataItem.title = "Exact YouTube Music Metadata"
+            exactMetadataItem.title = AppLocalization.string(
+                "Exact YouTube Music Metadata",
+                language: model.appLanguage
+            )
             exactMetadataItem.state = .on
         } else {
-            exactMetadataItem.title = "Enable Exact YouTube Music Metadata…"
+            exactMetadataItem.title = AppLocalization.string(
+                "Enable Exact YouTube Music Metadata…",
+                language: model.appLanguage
+            )
             exactMetadataItem.state = .off
         }
+    }
+
+    private func updateLocalizedTitles() {
+        let language = model.appLanguage
+        showNowPlayingItem.title = AppLocalization.string(
+            "Show Now Playing…",
+            language: language
+        )
+        showOverlayItem.title = AppLocalization.string(
+            "Show Overlay",
+            language: language
+        )
+        resetOverlayItem.title = AppLocalization.string(
+            "Reset Overlay Position",
+            language: language
+        )
+        discordItem.title = AppLocalization.string(
+            model.isDiscordConfigured
+                ? "Discord Rich Presence"
+                : "Discord Rich Presence (Not Configured)",
+            language: language
+        )
+        settingsItem.title = AppLocalization.string(
+            "Settings…",
+            language: language
+        )
+        quitItem.title = AppLocalization.string("Quit", language: language)
+        aboutItem.title = AppLocalization.format(
+            "About %@…",
+            language: language,
+            arguments: AppConfiguration.productName
+        )
+        updateExactMetadataItem()
     }
 }

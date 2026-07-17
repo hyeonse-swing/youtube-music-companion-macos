@@ -53,14 +53,27 @@ enum LyricTranslationLanguage: String, CaseIterable, Identifiable {
     }
 
     var displayName: String {
+        displayName(locale: .current, appLanguage: .system)
+    }
+
+    func displayName(locale: Locale, appLanguage: AppLanguage) -> String {
         if self == .system {
-            let language = Locale.current.localizedString(
-                forIdentifier: resolvedIdentifier
-            ) ?? resolvedIdentifier
-            return "System Language (\(language))"
+            let identifier = resolvedIdentifier
+            let languageCode = Locale(identifier: identifier)
+                .language
+                .languageCode?
+                .identifier
+                ?? identifier
+            let language = locale.localizedString(forLanguageCode: languageCode)
+                ?? languageCode
+            return AppLocalization.format(
+                "System Language (%@)",
+                language: appLanguage,
+                arguments: language
+            )
         }
-        return Locale.current.localizedString(forIdentifier: rawValue)
-            ?? Locale.current.localizedString(forLanguageCode: rawValue)
+        return locale.localizedString(forIdentifier: rawValue)
+            ?? locale.localizedString(forLanguageCode: rawValue)
             ?? rawValue
     }
 }

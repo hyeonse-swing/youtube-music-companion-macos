@@ -6,8 +6,8 @@ cd "$(dirname "$0")/.."
 
 APP="YTMusicCompanion"
 BUNDLE="${APP}.app"
-VERSION="0.14.1"
-BUILD_VERSION="18"
+VERSION="0.15.0"
+BUILD_VERSION="19"
 BUNDLE_ID="com.hyeonseswing.YTMusicCompanion"
 DISPLAY_NAME="YT Music Companion"
 DISCORD_CLIENT_ID="${DISCORD_CLIENT_ID:-}"
@@ -41,6 +41,13 @@ for resbundle in .build/release/*.bundle; do
     [ -e "${resbundle}" ] && cp -R "${resbundle}" "${BUNDLE}/Contents/Resources/"
 done
 
+# SwiftUI's standard localized controls resolve strings from the main app bundle.
+# Keep the same source localizations in both the SwiftPM resource bundle (used by
+# AppKit's explicit localizer) and the assembled app bundle.
+for localization in Sources/YTMusicCompanion/Resources/*.lproj; do
+    [ -d "${localization}" ] && cp -R "${localization}" "${BUNDLE}/Contents/Resources/"
+done
+
 # App icon (regenerate with: swift scripts/make-icon.swift then iconutil).
 [ -e scripts/AppIcon.icns ] && cp scripts/AppIcon.icns "${BUNDLE}/Contents/Resources/AppIcon.icns"
 
@@ -51,6 +58,12 @@ cat > "${BUNDLE}/Contents/Info.plist" <<PLIST
 <dict>
     <key>CFBundleName</key>            <string>${APP}</string>
     <key>CFBundleDisplayName</key>     <string>${DISPLAY_NAME}</string>
+    <key>CFBundleDevelopmentRegion</key> <string>en</string>
+    <key>CFBundleLocalizations</key>
+    <array>
+        <string>en</string>
+        <string>ko</string>
+    </array>
     <key>CFBundleIdentifier</key>      <string>${BUNDLE_ID}</string>
     <key>CFBundleExecutable</key>      <string>${APP}</string>
     <key>CFBundleIconFile</key>        <string>AppIcon</string>

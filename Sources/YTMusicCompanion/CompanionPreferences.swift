@@ -51,6 +51,7 @@ struct CompanionPreferences {
     private static let showsTranslatedLyricsKey = "showsTranslatedLyrics"
     private static let translationTargetLanguageKey = "translationTargetLanguage"
     private static let translationToneKey = "translationTone"
+    private static let appLanguageKey = "appLanguage"
     private static let displayMetadataSourceKey = "displayMetadataSource"
     private static let discordMetadataSourceKey = "discordMetadataSource"
     private static let trackOffsetsKey = "syncTrackOffsets"
@@ -119,6 +120,12 @@ struct CompanionPreferences {
     var translationTone: LyricTranslationTone {
         didSet {
             defaults.set(translationTone.rawValue, forKey: Self.translationToneKey)
+        }
+    }
+
+    var appLanguage: AppLanguage {
+        didSet {
+            defaults.set(appLanguage.rawValue, forKey: Self.appLanguageKey)
         }
     }
 
@@ -212,6 +219,9 @@ struct CompanionPreferences {
         translationTone = LyricTranslationTone(
             rawValue: defaults.string(forKey: Self.translationToneKey) ?? ""
         ) ?? .naturalLyrics
+        appLanguage = AppLanguage(
+            rawValue: defaults.string(forKey: Self.appLanguageKey) ?? ""
+        ) ?? .system
         displayMetadataSource = MetadataSourcePreference(
             rawValue: defaults.string(forKey: Self.displayMetadataSourceKey) ?? ""
         ) ?? .youtubeMusic

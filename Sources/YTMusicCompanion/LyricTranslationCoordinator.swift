@@ -1,4 +1,5 @@
 import AppKit
+import Combine
 import SwiftUI
 import Translation
 
@@ -8,6 +9,7 @@ import Translation
 @MainActor
 final class TranslationHostWindowController: NSWindowController {
     private var presentedRequestID: UUID?
+    private var languageCancellable: AnyCancellable?
 
     init(model: PlayerModel) {
         let panel = NSPanel(
@@ -18,7 +20,10 @@ final class TranslationHostWindowController: NSWindowController {
         )
         super.init(window: panel)
 
-        panel.title = "Lyric Translation"
+        panel.title = AppLocalization.string(
+            "Lyric Translation",
+            language: model.appLanguage
+        )
         panel.isFloatingPanel = true
         panel.isReleasedWhenClosed = false
         panel.level = .floating
@@ -29,6 +34,14 @@ final class TranslationHostWindowController: NSWindowController {
                 self?.setPanelVisible(show, for: requestID)
             }
         )
+        languageCancellable = model.$appLanguage
+            .removeDuplicates()
+            .sink { [weak panel] language in
+                panel?.title = AppLocalization.string(
+                    "Lyric Translation",
+                    language: language
+                )
+            }
     }
 
     @available(*, unavailable)
@@ -67,6 +80,7 @@ private struct LyricTranslationHostView: View {
         }
         .padding(24)
         .frame(maxWidth: .infinity, maxHeight: .infinity)
+        .environment(\.locale, model.appLanguage.locale)
         .background {
             LyricTranslationCoordinator(
                 model: model,

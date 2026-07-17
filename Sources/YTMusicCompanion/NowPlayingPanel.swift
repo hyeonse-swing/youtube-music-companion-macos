@@ -1,4 +1,5 @@
 import AppKit
+import Combine
 import SwiftUI
 
 enum PlaybackTimeFormatter {
@@ -27,6 +28,7 @@ private struct NowPlayingPanelView: View {
         }
         .padding(24)
         .frame(width: 500)
+        .environment(\.locale, model.appLanguage.locale)
     }
 
     private func trackContent(source: NowPlaying, display: NowPlaying) -> some View {
@@ -124,6 +126,7 @@ private struct ArtworkThumbnailView: View, Equatable {
 @MainActor
 final class NowPlayingWindowController: NSWindowController, NSWindowDelegate {
     private let onClose: () -> Void
+    private var languageCancellable: AnyCancellable?
 
     init(model: PlayerModel, onClose: @escaping () -> Void = {}) {
         self.onClose = onClose
@@ -136,7 +139,10 @@ final class NowPlayingWindowController: NSWindowController, NSWindowDelegate {
         super.init(window: panel)
 
         panel.delegate = self
-        panel.title = "Now Playing"
+        panel.title = AppLocalization.string(
+            "Now Playing",
+            language: model.appLanguage
+        )
         panel.isFloatingPanel = true
         panel.isReleasedWhenClosed = false
         panel.level = .floating
@@ -144,6 +150,14 @@ final class NowPlayingWindowController: NSWindowController, NSWindowDelegate {
         panel.collectionBehavior = [.moveToActiveSpace, .fullScreenAuxiliary]
         panel.hidesOnDeactivate = false
         panel.contentView = NSHostingView(rootView: NowPlayingPanelView(model: model))
+        languageCancellable = model.$appLanguage
+            .removeDuplicates()
+            .sink { [weak panel] language in
+                panel?.title = AppLocalization.string(
+                    "Now Playing",
+                    language: language
+                )
+            }
         let fittingSize = panel.contentView?.fittingSize ?? NSSize(width: 500, height: 330)
         panel.setContentSize(NSSize(width: 500, height: max(280, fittingSize.height)))
     }

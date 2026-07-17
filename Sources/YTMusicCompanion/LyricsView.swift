@@ -11,11 +11,18 @@ struct LyricsView: View {
             .opacity(model.isHovering ? 1.0 : 0.62)
             .animation(.easeInOut(duration: 0.25), value: model.isHovering)
             .overlay(alignment: .bottom) { if model.isHovering { syncReadout } }
+            .environment(\.locale, model.appLanguage.locale)
     }
 
     /// Sync calibration HUD, shown only while hovering: scroll to adjust.
     private var syncReadout: some View {
-        Text(String(format: "sync %+.2fs · scroll to adjust", model.syncOffset))
+        Text(
+            AppLocalization.format(
+                "sync %+.2fs · scroll to adjust",
+                language: model.appLanguage,
+                arguments: model.syncOffset
+            )
+        )
             .font(.system(size: 11, weight: .semibold, design: .monospaced))
             .foregroundStyle(.white.opacity(0.9))
             .padding(.horizontal, 9)

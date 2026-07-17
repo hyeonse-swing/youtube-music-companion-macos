@@ -27,11 +27,24 @@ final class CompanionPreferencesTests: XCTestCase {
         XCTAssertFalse(preferences.showsTranslatedLyrics)
         XCTAssertEqual(preferences.translationTargetLanguage, .system)
         XCTAssertEqual(preferences.translationTone, .naturalLyrics)
+        XCTAssertEqual(preferences.appLanguage, .system)
         XCTAssertEqual(preferences.displayMetadataSource, .youtubeMusic)
         XCTAssertEqual(preferences.discordMetadataSource, .youtubeMusic)
         XCTAssertEqual(preferences.discordPresenceConfiguration, .standard)
         XCTAssertEqual(preferences.overlayPreset, .balanced)
         XCTAssertFalse(preferences.karaokeModeEnabled)
+    }
+
+    func testAppLanguagePersistsAndCanReturnToSystemDefault() {
+        var preferences = CompanionPreferences(defaults: defaults)
+        preferences.appLanguage = .korean
+
+        preferences = CompanionPreferences(defaults: defaults)
+        XCTAssertEqual(preferences.appLanguage, .korean)
+
+        preferences.appLanguage = .system
+        preferences = CompanionPreferences(defaults: defaults)
+        XCTAssertEqual(preferences.appLanguage, .system)
     }
 
     func testOverlayAppearanceChoicesPersist() {

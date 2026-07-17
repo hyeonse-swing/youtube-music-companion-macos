@@ -3,12 +3,13 @@ import PackageDescription
 
 let package = Package(
     name: "YTMusicCompanion",
+    defaultLocalization: "en",
     platforms: [.macOS(.v14)],
     targets: [
         .executableTarget(
             name: "YTMusicCompanion",
             path: "Sources/YTMusicCompanion",
-            resources: [.copy("Resources/tray-icon.png")]
+            resources: [.process("Resources")]
         ),
         .testTarget(
             name: "YTMusicCompanionTests",

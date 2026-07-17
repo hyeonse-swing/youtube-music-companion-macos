@@ -1,8 +1,10 @@
 import AppKit
+import Combine
 import SwiftUI
 import UniformTypeIdentifiers
 
 private enum SettingsTab: String, CaseIterable, Identifiable {
+    case general = "General"
     case lyrics = "Lyrics"
     case metadata = "Metadata"
     case discord = "Discord"
@@ -13,29 +15,32 @@ private enum SettingsTab: String, CaseIterable, Identifiable {
 
 private struct CompanionSettingsView: View {
     @ObservedObject var model: PlayerModel
-    @State private var selectedTab = SettingsTab.lyrics
+    @State private var selectedTab = SettingsTab.general
 
     var body: some View {
         VStack(spacing: 12) {
             Picker("Settings section", selection: $selectedTab) {
                 ForEach(SettingsTab.allCases) { tab in
-                    Text(tab.rawValue).tag(tab)
+                    Text(LocalizedStringKey(tab.rawValue)).tag(tab)
                 }
             }
             .labelsHidden()
             .pickerStyle(.segmented)
-            .frame(width: 420)
+            .frame(width: 540)
 
             selectedContent
                 .frame(maxWidth: .infinity, maxHeight: .infinity)
         }
         .padding(20)
-        .frame(minWidth: 640, idealWidth: 680, minHeight: 600, idealHeight: 650)
+        .frame(minWidth: 680, idealWidth: 720, minHeight: 600, idealHeight: 650)
+        .environment(\.locale, model.appLanguage.locale)
     }
 
     @ViewBuilder
     private var selectedContent: some View {
         switch selectedTab {
+        case .general:
+            GeneralSettingsView(model: model)
         case .lyrics:
             LyricsSettingsView(model: model)
         case .metadata:
@@ -48,16 +53,74 @@ private struct CompanionSettingsView: View {
     }
 }
 
+private struct GeneralSettingsView: View {
+    @ObservedObject var model: PlayerModel
+
+    var body: some View {
+        Form {
+            Section("Language & Region") {
+                Picker("App language", selection: $model.appLanguage) {
+                    ForEach(AppLanguage.allCases) { language in
+                        Text(displayName(for: language)).tag(language)
+                    }
+                }
+
+                LabeledContent("Current interface language") {
+                    Text(currentLanguageName)
+                        .foregroundStyle(.secondary)
+                }
+
+                Text(
+                    AppLocalization.string(
+                        "System Default follows the first supported language in macOS. "
+                            + "Changes apply immediately and do not affect lyric translation.",
+                        language: model.appLanguage
+                    )
+                )
+                .font(.caption)
+                .foregroundStyle(.secondary)
+
+                HStack {
+                    Spacer()
+                    Button("Use System Language") {
+                        model.appLanguage = .system
+                    }
+                    .disabled(model.appLanguage == .system)
+                }
+            }
+        }
+        .formStyle(.grouped)
+    }
+
+    private func displayName(for language: AppLanguage) -> String {
+        guard language == .system else { return language.nativeDisplayName }
+        return AppLocalization.string(
+            language.nativeDisplayName,
+            language: model.appLanguage
+        )
+    }
+
+    private var currentLanguageName: String {
+        let identifier = model.appLanguage.resolvedIdentifier
+        let language = Locale(identifier: identifier)
+        return language.localizedString(forLanguageCode: identifier)
+            ?? identifier
+    }
+}
+
 private struct SettingsEmptyState: View {
     let title: String
     let systemImage: String
     let description: String
+    let language: AppLanguage
 
     var body: some View {
         ContentUnavailableView(
-            title,
+            AppLocalization.string(title, language: language),
             systemImage: systemImage,
-            description: Text(description)
+            description: Text(
+                AppLocalization.string(description, language: language)
+            )
         )
         .frame(maxWidth: .infinity)
         .frame(height: 180)
@@ -81,11 +144,22 @@ private struct LyricsSettingsView: View {
                     )
                 ) {
                     ForEach(OverlayPreset.allCases) { preset in
-                        Text(preset.displayName).tag(preset)
+                        Text(
+                            AppLocalization.string(
+                                preset.displayName,
+                                language: model.appLanguage
+                            )
+                        )
+                        .tag(preset)
                     }
                 }
 
-                Text(model.overlayPreset.helpText)
+                Text(
+                    AppLocalization.string(
+                        model.overlayPreset.helpText,
+                        language: model.appLanguage
+                    )
+                )
                     .font(.caption)
                     .foregroundStyle(.secondary)
 
@@ -111,9 +185,12 @@ private struct LyricsSettingsView: View {
                     isOn: $model.karaokeModeEnabled
                 )
                 Text(
-                    "Highlights the current line from left to right using line timestamps. "
-                        + "It estimates the pacing because standard LRC files do not "
-                        + "contain word-level timing."
+                    AppLocalization.string(
+                        "Highlights the current line from left to right using line timestamps. "
+                            + "It estimates the pacing because standard LRC files do not "
+                            + "contain word-level timing.",
+                        language: model.appLanguage
+                    )
                 )
                 .font(.caption)
                 .foregroundStyle(.secondary)
@@ -140,8 +217,11 @@ private struct LyricsSettingsView: View {
 
                 Toggle("Show romanization", isOn: $model.showsRomanizedLyrics)
                 Text(
-                    "Adds a pronunciation line only when it differs from the original. "
-                        + "A timing-matched lyric version is preferred when available."
+                    AppLocalization.string(
+                        "Adds a pronunciation line only when it differs from the original. "
+                            + "A timing-matched lyric version is preferred when available.",
+                        language: model.appLanguage
+                    )
                 )
                 .font(.caption)
                 .foregroundStyle(.secondary)
@@ -154,7 +234,13 @@ private struct LyricsSettingsView: View {
                         selection: $model.translationTargetLanguage
                     ) {
                         ForEach(LyricTranslationLanguage.allCases) { language in
-                            Text(language.displayName).tag(language)
+                            Text(
+                                language.displayName(
+                                    locale: model.appLanguage.locale,
+                                    appLanguage: model.appLanguage
+                                )
+                            )
+                            .tag(language)
                         }
                     }
                     .disabled(!model.showsTranslatedLyrics)
@@ -164,15 +250,24 @@ private struct LyricsSettingsView: View {
                         selection: $model.translationTone
                     ) {
                         ForEach(LyricTranslationTone.allCases) { tone in
-                            Text(tone.displayName).tag(tone)
+                            Text(
+                                AppLocalization.string(
+                                    tone.displayName,
+                                    language: model.appLanguage
+                                )
+                            )
+                            .tag(tone)
                         }
                     }
                     .disabled(!model.showsTranslatedLyrics)
 
                     Text(
-                        "Natural lyrics keeps Korean sentence endings in one "
-                            + "conversational tone. Other target languages keep "
-                            + "the system translator’s wording."
+                        AppLocalization.string(
+                            "Natural lyrics keeps Korean sentence endings in one "
+                                + "conversational tone. Other target languages keep "
+                                + "the system translator’s wording.",
+                            language: model.appLanguage
+                        )
                     )
                     .font(.caption)
                     .foregroundStyle(.secondary)
@@ -189,7 +284,12 @@ private struct LyricsSettingsView: View {
                                 )
                                 .accessibilityHidden(true)
                             }
-                            Text(model.lyricTranslationStatus.displayName)
+                            Text(
+                                AppLocalization.string(
+                                    model.lyricTranslationStatus.displayName,
+                                    language: model.appLanguage
+                                )
+                            )
                                 .foregroundStyle(.secondary)
                                 .lineLimit(2)
                         }
@@ -223,7 +323,13 @@ private struct LyricsSettingsView: View {
 
             Section("Timing") {
                 LabeledContent("Current adjustment") {
-                    Text(String(format: "%+.2f seconds", model.syncOffset))
+                    Text(
+                        AppLocalization.format(
+                            "%+.2f seconds",
+                            language: model.appLanguage,
+                            arguments: model.syncOffset
+                        )
+                    )
                         .monospacedDigit()
                 }
 
@@ -240,24 +346,42 @@ private struct LyricsSettingsView: View {
             Section("Local Lyrics") {
                 LabeledContent("Current source") {
                     Label(
-                        model.customLyricsSourceName ?? "Online or saved lyrics",
+                        model.customLyricsSourceName
+                            ?? AppLocalization.string(
+                                "Online or saved lyrics",
+                                language: model.appLanguage
+                            ),
                         systemImage: model.hasCustomLyrics
                             ? "doc.badge.checkmark"
                             : "network"
                     )
                     .lineLimit(1)
-                    .help(model.customLyricsSourceName ?? "Lyrics selected from LRCLIB")
+                    .help(
+                        model.customLyricsSourceName
+                            ?? AppLocalization.string(
+                                "Lyrics selected from LRCLIB",
+                                language: model.appLanguage
+                            )
+                    )
                 }
 
                 HStack {
                     Text(
-                        model.hasNowPlaying
-                            ? "Imported LRC files are copied to this Mac and pinned to this song."
-                            : "Start a song to import or export its synced lyrics."
+                        AppLocalization.string(
+                            model.hasNowPlaying
+                                ? "Imported LRC files are copied to this Mac and pinned to this song."
+                                : "Start a song to import or export its synced lyrics.",
+                            language: model.appLanguage
+                        )
                     )
                     .foregroundStyle(.secondary)
                     Spacer()
-                    Button(model.hasCustomLyrics ? "Replace LRC…" : "Import LRC…") {
+                    Button(
+                        AppLocalization.string(
+                            model.hasCustomLyrics ? "Replace LRC…" : "Import LRC…",
+                            language: model.appLanguage
+                        )
+                    ) {
                         importLyrics()
                     }
                     .disabled(!model.hasNowPlaying)
@@ -291,7 +415,10 @@ private struct LyricsSettingsView: View {
                     try model.removeCustomLyrics()
                 } catch {
                     fileAlert = LyricsFileAlert(
-                        title: "Couldn’t Remove Lyrics",
+                        title: AppLocalization.string(
+                            "Couldn’t Remove Lyrics",
+                            language: model.appLanguage
+                        ),
                         message: error.localizedDescription
                     )
                 }
@@ -314,7 +441,8 @@ private struct LyricsSettingsView: View {
             SettingsEmptyState(
                 title: "Nothing Playing",
                 systemImage: "captions.bubble",
-                description: "Start a song in YouTube Music to choose its synced lyrics."
+                description: "Start a song in YouTube Music to choose its synced lyrics.",
+                language: model.appLanguage
             )
         } else if model.lyricCandidates.isEmpty {
             VStack(spacing: 12) {
@@ -326,8 +454,9 @@ private struct LyricsSettingsView: View {
                         "Using Imported Lyrics",
                         systemImage: "doc.badge.checkmark",
                         description: Text(
-                            model.lyricCandidateStatusMessage
-                                ?? "The imported LRC file is pinned to this song."
+                            localizedStatusMessage(
+                                fallback: "The imported LRC file is pinned to this song."
+                            )
                         )
                     )
                 } else if !model.lines.isEmpty {
@@ -335,8 +464,9 @@ private struct LyricsSettingsView: View {
                         "Using Saved Lyrics",
                         systemImage: "checkmark.circle",
                         description: Text(
-                            model.lyricCandidateStatusMessage
-                                ?? "Saved lyrics are active for this song."
+                            localizedStatusMessage(
+                                fallback: "Saved lyrics are active for this song."
+                            )
                         )
                     )
                 } else {
@@ -344,12 +474,18 @@ private struct LyricsSettingsView: View {
                         "No Lyric Choices",
                         systemImage: "text.badge.xmark",
                         description: Text(
-                            model.lyricCandidateStatusMessage
-                                ?? "No synced lyrics have been loaded for this song."
+                            localizedStatusMessage(
+                                fallback: "No synced lyrics have been loaded for this song."
+                            )
                         )
                     )
                 }
-                Button(model.lines.isEmpty ? "Try Again" : "Load Lyric Choices") {
+                Button(
+                    AppLocalization.string(
+                        model.lines.isEmpty ? "Try Again" : "Load Lyric Choices",
+                        language: model.appLanguage
+                    )
+                ) {
                     model.reloadLyricCandidates()
                 }
                     .disabled(model.isFetchingLyricCandidates)
@@ -359,9 +495,12 @@ private struct LyricsSettingsView: View {
             VStack(alignment: .leading, spacing: 10) {
                 HStack {
                     Text(
-                        model.hasCustomLyrics
-                            ? "Imported lyrics are active. Choose an online version to replace them."
-                            : "Choose the LRCLIB result used for this song. Your choice is remembered."
+                        AppLocalization.string(
+                            model.hasCustomLyrics
+                                ? "Imported lyrics are active. Choose an online version to replace them."
+                                : "Choose the LRCLIB result used for this song. Your choice is remembered.",
+                            language: model.appLanguage
+                        )
                     )
                         .foregroundStyle(.secondary)
                     Spacer()
@@ -377,7 +516,8 @@ private struct LyricsSettingsView: View {
                         LyricCandidateRow(
                             candidate: candidate,
                             isRecommended: index == 0,
-                            isSelected: model.selectedLyricCandidateID == candidate.id
+                            isSelected: model.selectedLyricCandidateID == candidate.id,
+                            language: model.appLanguage
                         )
                         .tag(candidate.id)
                     }
@@ -395,11 +535,35 @@ private struct LyricsSettingsView: View {
         )
     }
 
+    private func localizedStatusMessage(fallback: String) -> String {
+        let message = model.lyricCandidateStatusMessage ?? fallback
+        if
+            let sourceName = model.customLyricsSourceName,
+            message == "Using \(sourceName). Imported lyrics stay on this Mac."
+        {
+            return AppLocalization.format(
+                "Using %@. Imported lyrics stay on this Mac.",
+                language: model.appLanguage,
+                arguments: sourceName
+            )
+        }
+        return AppLocalization.string(message, language: model.appLanguage)
+    }
+
     private func importLyrics() {
         let panel = NSOpenPanel()
-        panel.title = model.hasCustomLyrics ? "Replace Imported Lyrics" : "Import Synced Lyrics"
-        panel.message = "Choose a UTF-8 LRC file with timestamped lyric lines."
-        panel.prompt = model.hasCustomLyrics ? "Replace" : "Import"
+        panel.title = AppLocalization.string(
+            model.hasCustomLyrics ? "Replace Imported Lyrics" : "Import Synced Lyrics",
+            language: model.appLanguage
+        )
+        panel.message = AppLocalization.string(
+            "Choose a UTF-8 LRC file with timestamped lyric lines.",
+            language: model.appLanguage
+        )
+        panel.prompt = AppLocalization.string(
+            model.hasCustomLyrics ? "Replace" : "Import",
+            language: model.appLanguage
+        )
         panel.allowedContentTypes = [UTType(filenameExtension: "lrc") ?? .plainText]
         panel.allowsMultipleSelection = false
         panel.canChooseDirectories = false
@@ -410,7 +574,10 @@ private struct LyricsSettingsView: View {
                 try model.importCustomLyrics(from: url)
             } catch {
                 fileAlert = LyricsFileAlert(
-                    title: "Couldn’t Import Lyrics",
+                    title: AppLocalization.string(
+                        "Couldn’t Import Lyrics",
+                        language: model.appLanguage
+                    ),
                     message: error.localizedDescription
                 )
             }
@@ -424,9 +591,18 @@ private struct LyricsSettingsView: View {
 
     private func exportLyrics() {
         let panel = NSSavePanel()
-        panel.title = "Export Synced Lyrics"
-        panel.message = "Save the currently displayed lyrics as a UTF-8 LRC file."
-        panel.prompt = "Export"
+        panel.title = AppLocalization.string(
+            "Export Synced Lyrics",
+            language: model.appLanguage
+        )
+        panel.message = AppLocalization.string(
+            "Save the currently displayed lyrics as a UTF-8 LRC file.",
+            language: model.appLanguage
+        )
+        panel.prompt = AppLocalization.string(
+            "Export",
+            language: model.appLanguage
+        )
         panel.allowedContentTypes = [UTType(filenameExtension: "lrc") ?? .plainText]
         panel.nameFieldStringValue = model.suggestedLyricsFilename
         panel.canCreateDirectories = true
@@ -437,7 +613,10 @@ private struct LyricsSettingsView: View {
                 try model.exportCurrentLyrics(to: url)
             } catch {
                 fileAlert = LyricsFileAlert(
-                    title: "Couldn’t Export Lyrics",
+                    title: AppLocalization.string(
+                        "Couldn’t Export Lyrics",
+                        language: model.appLanguage
+                    ),
                     message: error.localizedDescription
                 )
             }
@@ -460,6 +639,7 @@ private struct LyricCandidateRow: View {
     let candidate: LyricCandidate
     let isRecommended: Bool
     let isSelected: Bool
+    let language: AppLanguage
 
     var body: some View {
         HStack(spacing: 10) {
@@ -484,7 +664,12 @@ private struct LyricCandidateRow: View {
                     .lineLimit(1)
             }
             Spacer(minLength: 8)
-            Text(candidate.script.displayName)
+            Text(
+                AppLocalization.string(
+                    candidate.script.displayName,
+                    language: language
+                )
+            )
                 .font(.caption)
                 .foregroundStyle(.secondary)
         }
@@ -493,7 +678,9 @@ private struct LyricCandidateRow: View {
     }
 
     private var candidateSubtitle: String {
-        let album = candidate.album.isEmpty ? "Unknown album" : candidate.album
+        let album = candidate.album.isEmpty
+            ? AppLocalization.string("Unknown album", language: language)
+            : candidate.album
         return "\(candidate.artist) · \(album) · "
             + PlaybackTimeFormatter.string(seconds: candidate.duration)
     }
@@ -505,8 +692,16 @@ private struct MetadataSettingsView: View {
     var body: some View {
         Form {
             Section("App and Now Playing Panel") {
-                MetadataSourcePicker(selection: $model.displayMetadataSource)
-                Text(model.displayMetadataSource.helpText)
+                MetadataSourcePicker(
+                    selection: $model.displayMetadataSource,
+                    language: model.appLanguage
+                )
+                Text(
+                    AppLocalization.string(
+                        model.displayMetadataSource.helpText,
+                        language: model.appLanguage
+                    )
+                )
                     .font(.caption)
                     .foregroundStyle(.secondary)
             }
@@ -518,18 +713,21 @@ private struct MetadataSettingsView: View {
                         track: model.youtubeMusicNowPlaying,
                         unavailableText: model.hasExactMetadataAccess
                             ? "Reading the player bar…"
-                            : "Screen access is not enabled."
+                            : "Screen access is not enabled.",
+                        language: model.appLanguage
                     )
                     MetadataPreviewRow(
                         title: "macOS playback info",
                         track: model.sourceNowPlaying,
-                        unavailableText: "Unavailable"
+                        unavailableText: "Unavailable",
+                        language: model.appLanguage
                     )
                 } else {
                     SettingsEmptyState(
                         title: "Nothing Playing",
                         systemImage: "music.note",
-                        description: "Start a song to compare the available metadata."
+                        description: "Start a song to compare the available metadata.",
+                        language: model.appLanguage
                     )
                 }
             }
@@ -585,7 +783,10 @@ private struct DiscordSettingsView: View {
                     .foregroundStyle(.secondary)
                 } else {
                     Label(
-                        model.discordConnectionStatus.displayName,
+                        AppLocalization.string(
+                            model.discordConnectionStatus.displayName,
+                            language: model.appLanguage
+                        ),
                         systemImage: model.discordConnectionStatus.systemImage
                     )
                     .foregroundStyle(.secondary)
@@ -604,7 +805,13 @@ private struct DiscordSettingsView: View {
 
             Picker("Presence editor", selection: $editorMode) {
                 ForEach(EditorMode.allCases) { mode in
-                    Text(mode.rawValue).tag(mode)
+                    Text(
+                        AppLocalization.string(
+                            mode.rawValue,
+                            language: model.appLanguage
+                        )
+                    )
+                    .tag(mode)
                 }
             }
             .pickerStyle(.segmented)
@@ -634,25 +841,50 @@ private struct DiscordSettingsView: View {
         Section("Live Preset") {
             Picker("Preset", selection: $draft.preset) {
                 ForEach(DiscordPresencePreset.allCases) { preset in
-                    Text(preset.displayName).tag(preset)
+                    Text(
+                        AppLocalization.string(
+                            preset.displayName,
+                            language: model.appLanguage
+                        )
+                    )
+                    .tag(preset)
                 }
             }
             .onChange(of: draft.preset) { oldValue, newValue in
                 guard oldValue != newValue, newValue != .custom else { return }
                 draft = newValue.applying(to: draft)
             }
-            Text(draft.preset.helpText)
+            Text(
+                AppLocalization.string(
+                    draft.preset.helpText,
+                    language: model.appLanguage
+                )
+            )
                 .font(.caption)
                 .foregroundStyle(.secondary)
 
-            MetadataSourcePicker(selection: $model.discordMetadataSource)
-            Text(model.discordMetadataSource.helpText)
+            MetadataSourcePicker(
+                selection: $model.discordMetadataSource,
+                language: model.appLanguage
+            )
+            Text(
+                AppLocalization.string(
+                    model.discordMetadataSource.helpText,
+                    language: model.appLanguage
+                )
+            )
                 .font(.caption)
                 .foregroundStyle(.secondary)
 
             Picker("When playback pauses", selection: $draft.pausePolicy) {
                 ForEach(DiscordPausePolicy.allCases) { policy in
-                    Text(policy.displayName).tag(policy)
+                    Text(
+                        AppLocalization.string(
+                            policy.displayName,
+                            language: model.appLanguage
+                        )
+                    )
+                    .tag(policy)
                 }
             }
         }
@@ -688,13 +920,22 @@ private struct DiscordSettingsView: View {
             TextField("Secondary button HTTPS URL", text: $draft.secondaryButtonURL)
 
             if let liveValidationMessage {
-                Label(liveValidationMessage, systemImage: "exclamationmark.triangle")
+                Label(
+                    AppLocalization.string(
+                        liveValidationMessage,
+                        language: model.appLanguage
+                    ),
+                    systemImage: "exclamationmark.triangle"
+                )
                     .font(.caption)
                     .foregroundStyle(.secondary)
             } else {
                 Text(
-                    "Discord supports at most two buttons. Buttons appear to other "
-                        + "people, so your own profile card may not show them."
+                    AppLocalization.string(
+                        "Discord supports at most two buttons. Buttons appear to other "
+                            + "people, so your own profile card may not show them.",
+                        language: model.appLanguage
+                    )
                 )
                 .font(.caption)
                 .foregroundStyle(.secondary)
@@ -713,9 +954,12 @@ private struct DiscordSettingsView: View {
 
             HStack {
                 Text(
-                    model.discordPreviewTrack == nil
-                        ? "Start a song to add it to the private list."
-                        : "Only a one-way fingerprint is saved; the title and URL are not stored."
+                    AppLocalization.string(
+                        model.discordPreviewTrack == nil
+                            ? "Start a song to add it to the private list."
+                            : "Only a one-way fingerprint is saved; the title and URL are not stored.",
+                        language: model.appLanguage
+                    )
                 )
                 .font(.caption)
                 .foregroundStyle(.secondary)
@@ -733,7 +977,8 @@ private struct DiscordSettingsView: View {
                 artwork: model.nowPlayingArtwork,
                 remoteCoverURL: nil,
                 modeLabel: "Live",
-                usesExample: model.discordPreviewTrack == nil
+                usesExample: model.discordPreviewTrack == nil,
+                language: model.appLanguage
             )
         }
 
@@ -777,7 +1022,13 @@ private struct DiscordSettingsView: View {
             Toggle("Show playback time", isOn: $manualDraft.showsPlaybackTime)
             Picker("Return to live after", selection: $manualDraft.lifetime) {
                 ForEach(ManualPresenceLifetime.allCases) { lifetime in
-                    Text(lifetime.displayName).tag(lifetime)
+                    Text(
+                        AppLocalization.string(
+                            lifetime.displayName,
+                            language: model.appLanguage
+                        )
+                    )
+                    .tag(lifetime)
                 }
             }
         }
@@ -787,8 +1038,11 @@ private struct DiscordSettingsView: View {
             TextField("Button HTTPS URL", text: $manualDraft.secondaryButtonURL)
 
             Text(
-                "Manual presence is clearly marked inside the app, expires automatically, "
-                    + "and is not restored after the app quits."
+                AppLocalization.string(
+                    "Manual presence is clearly marked inside the app, expires automatically, "
+                        + "and is not restored after the app quits.",
+                    language: model.appLanguage
+                )
             )
             .font(.caption)
             .foregroundStyle(.secondary)
@@ -800,13 +1054,20 @@ private struct DiscordSettingsView: View {
                 artwork: nil,
                 remoteCoverURL: DiscordURLValidator.httpsURL(manualDraft.coverURL),
                 modeLabel: "Manual",
-                usesExample: false
+                usesExample: false,
+                language: model.appLanguage
             )
         }
 
         Section {
             if let message = manualDraft.validationMessage ?? manualError {
-                Label(message, systemImage: "exclamationmark.triangle")
+                Label(
+                    AppLocalization.string(
+                        message,
+                        language: model.appLanguage
+                    ),
+                    systemImage: "exclamationmark.triangle"
+                )
                     .font(.caption)
                     .foregroundStyle(.secondary)
             }
@@ -968,8 +1229,15 @@ private struct DiagnosticsSettingsView: View {
             Section("Playback Engine") {
                 LabeledContent("Polling") {
                     Text(
-                        "\(diagnostics.pollMode.displayName) · "
-                            + "\(format(diagnostics.nextPollInterval)) seconds"
+                        AppLocalization.format(
+                            "%@ · %@ seconds",
+                            language: model.appLanguage,
+                            arguments: AppLocalization.string(
+                                diagnostics.pollMode.displayName,
+                                language: model.appLanguage
+                            ),
+                            format(diagnostics.nextPollInterval)
+                        )
                     )
                     .monospacedDigit()
                 }
@@ -991,7 +1259,10 @@ private struct DiagnosticsSettingsView: View {
                 LabeledContent("Active work") {
                     Text(
                         diagnostics.activeOperations.isEmpty
-                            ? "None"
+                            ? AppLocalization.string(
+                                "None",
+                                language: model.appLanguage
+                            )
                             : diagnostics.activeOperations.joined(separator: ", ")
                     )
                 }
@@ -1056,15 +1327,21 @@ private struct DiagnosticsSettingsView: View {
 
             Section("Discord") {
                 Label(
-                    diagnostics.discordStatus.displayName,
+                    AppLocalization.string(
+                        diagnostics.discordStatus.displayName,
+                        language: model.appLanguage
+                    ),
                     systemImage: diagnostics.discordStatus.systemImage
                 )
             }
 
             Section {
                 Text(
-                    "Diagnostics stay on this Mac. Track titles are not written "
-                        + "to the diagnostic counters shown here."
+                    AppLocalization.string(
+                        "Diagnostics stay on this Mac. Track titles are not written "
+                            + "to the diagnostic counters shown here.",
+                        language: model.appLanguage
+                    )
                 )
                 .font(.caption)
                 .foregroundStyle(.secondary)
@@ -1078,8 +1355,11 @@ private struct DiagnosticsSettingsView: View {
             }
         } message: {
             Text(
-                "Lyrics will be downloaded again and translations will be regenerated "
-                    + "when those songs are played."
+                AppLocalization.string(
+                    "Lyrics will be downloaded again and translations will be regenerated "
+                        + "when those songs are played.",
+                    language: model.appLanguage
+                )
             )
         }
     }
@@ -1093,11 +1373,18 @@ private struct DiagnosticsSettingsView: View {
 
 private struct MetadataSourcePicker: View {
     @Binding var selection: MetadataSourcePreference
+    let language: AppLanguage
 
     var body: some View {
         Picker("Metadata source", selection: $selection) {
             ForEach(MetadataSourcePreference.allCases) { source in
-                Text(source.displayName).tag(source)
+                Text(
+                    AppLocalization.string(
+                        source.displayName,
+                        language: language
+                    )
+                )
+                .tag(source)
             }
         }
         .pickerStyle(.radioGroup)
@@ -1110,11 +1397,17 @@ private struct DiscordPresencePreview: View {
     let remoteCoverURL: URL?
     let modeLabel: String
     let usesExample: Bool
+    let language: AppLanguage
 
     var body: some View {
         VStack(alignment: .leading, spacing: 10) {
             HStack {
-                Label(modeLabel, systemImage: modeLabel == "Manual" ? "slider.horizontal.3" : "waveform")
+                Label(
+                    AppLocalization.string(modeLabel, language: language),
+                    systemImage: modeLabel == "Manual"
+                        ? "slider.horizontal.3"
+                        : "waveform"
+                )
                     .font(.caption.weight(.medium))
                     .foregroundStyle(.secondary)
                 if usesExample {
@@ -1214,9 +1507,12 @@ private struct MetadataPreviewRow: View {
     let title: String
     let track: NowPlaying?
     let unavailableText: String
+    let language: AppLanguage
 
     var body: some View {
-        LabeledContent(title) {
+        LabeledContent(
+            AppLocalization.string(title, language: language)
+        ) {
             if let track {
                 VStack(alignment: .trailing, spacing: 2) {
                     Text(track.title).fontWeight(.medium)
@@ -1226,7 +1522,12 @@ private struct MetadataPreviewRow: View {
                 }
                 .textSelection(.enabled)
             } else {
-                Text(unavailableText)
+                Text(
+                    AppLocalization.string(
+                        unavailableText,
+                        language: language
+                    )
+                )
                     .foregroundStyle(.secondary)
             }
         }
@@ -1236,11 +1537,12 @@ private struct MetadataPreviewRow: View {
 @MainActor
 final class SettingsWindowController: NSWindowController, NSWindowDelegate {
     private let onClose: () -> Void
+    private var languageCancellable: AnyCancellable?
 
     init(model: PlayerModel, onClose: @escaping () -> Void = {}) {
         self.onClose = onClose
         let panel = NSPanel(
-            contentRect: NSRect(x: 0, y: 0, width: 680, height: 650),
+            contentRect: NSRect(x: 0, y: 0, width: 720, height: 650),
             styleMask: [.titled, .closable, .resizable],
             backing: .buffered,
             defer: false
@@ -1248,15 +1550,26 @@ final class SettingsWindowController: NSWindowController, NSWindowDelegate {
         super.init(window: panel)
 
         panel.delegate = self
-        panel.title = "Settings"
+        panel.title = AppLocalization.string(
+            "Settings",
+            language: model.appLanguage
+        )
         panel.isFloatingPanel = true
         panel.isReleasedWhenClosed = false
         panel.level = .floating
         panel.animationBehavior = .documentWindow
         panel.collectionBehavior = [.moveToActiveSpace, .fullScreenAuxiliary]
         panel.hidesOnDeactivate = false
-        panel.minSize = NSSize(width: 640, height: 600)
+        panel.minSize = NSSize(width: 680, height: 600)
         panel.contentView = NSHostingView(rootView: CompanionSettingsView(model: model))
+        languageCancellable = model.$appLanguage
+            .removeDuplicates()
+            .sink { [weak panel] language in
+                panel?.title = AppLocalization.string(
+                    "Settings",
+                    language: language
+                )
+            }
     }
 
     @available(*, unavailable)
