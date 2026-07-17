@@ -297,6 +297,7 @@ private struct DiscordSettingsView: View {
                 TextField("Cover description", text: $draft.imageTextTemplate)
                     .accessibilityHint("Supports title, artist, and album tokens")
                 Toggle("Show playback time", isOn: $draft.showsPlaybackTime)
+                Toggle("Show YouTube Music song link", isOn: $draft.showsSongLink)
 
                 VStack(alignment: .leading, spacing: 4) {
                     Text("Available tokens: " + DiscordPresenceConfiguration.supportedTokens.joined(separator: "  "))
@@ -406,10 +407,16 @@ private struct DiscordPresencePreview: View {
 
             Spacer(minLength: 12)
 
-            Label(
-                configuration.showsPlaybackTime ? "Time shown" : "Time hidden",
-                systemImage: configuration.showsPlaybackTime ? "clock" : "clock.badge.xmark"
-            )
+            VStack(alignment: .trailing, spacing: 5) {
+                Label(
+                    configuration.showsPlaybackTime ? "Time shown" : "Time hidden",
+                    systemImage: configuration.showsPlaybackTime ? "clock" : "clock.badge.xmark"
+                )
+                Label(
+                    configuration.showsSongLink ? "Song link enabled" : "Song link hidden",
+                    systemImage: configuration.showsSongLink ? "link" : "eye.slash"
+                )
+            }
             .font(.caption)
             .foregroundStyle(.secondary)
         }
@@ -421,7 +428,8 @@ private struct DiscordPresencePreview: View {
     private func accessibilityDescription(content: DiscordPresenceContent) -> String {
         let kind = track == nil ? "Example Discord preview" : "Current Discord preview"
         let time = configuration.showsPlaybackTime ? "playback time shown" : "playback time hidden"
-        return "\(kind), \(content.details), \(content.state), \(content.imageText), \(time)"
+        let link = configuration.showsSongLink ? "song link enabled" : "song link hidden"
+        return "\(kind), \(content.details), \(content.state), \(content.imageText), \(time), \(link)"
     }
 }
 

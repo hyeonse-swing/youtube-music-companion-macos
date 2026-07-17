@@ -4,14 +4,15 @@ A focused macOS menu-bar app for the installed YouTube Music web app. It:
 
 - Shows synchronized lyrics in a transparent, click-through overlay.
 - Shows the exact YouTube Music cover supplied to macOS in the Now Playing panel.
-- Publishes the current track, visually verified artwork, and progress to Discord Rich Presence.
+- Publishes the current track, visually verified artwork, progress, and an exact
+  YouTube Music song link to Discord Rich Presence.
 - Uses the exact title, artist, and album rendered in YouTube Music's player bar,
   including bilingual labels such as `鋼の羽根 - Iron Feather`.
 - Shows the current track and playback progress in a native **Now Playing** panel.
 - Lets you choose lyric versions, lyric size, timing resets, and separate metadata
   sources for the app and Discord from a native **Settings** panel.
-- Lets you customize Discord's top line, second line, cover description, and
-  playback-time visibility with track metadata templates.
+- Lets you customize Discord's top line, second line, cover description,
+  playback-time visibility, and song-link visibility with track metadata templates.
 
 Other players and ordinary browser tabs are intentionally ignored.
 
@@ -27,11 +28,14 @@ version, build number, Discord configuration status, bundle identifier, and proj
   next launch and falls back automatically if a display is disconnected.
 - **Reset Overlay Position** returns the overlay to the bottom of the primary display.
 - Scroll over the current lyric line to adjust lyric synchronization.
+- A new song always starts at `0.00s`; a manual timing adjustment is restored only
+  when that same recording plays again.
 - **Settings…** (`⌘,`) changes lyric size, resets the current or all timing
   adjustments, selects an LRCLIB result per song, and independently chooses
   YouTube Music screen metadata or macOS playback metadata for the app and Discord.
 - The **Discord** settings tab supports `{title}`, `{artist}`, and `{album}` tokens,
-  shows a live preview, and provides **Revert Changes** and **Reset to Defaults**.
+  shows a live preview, lets you show or hide the exact current-song link, and
+  provides **Revert Changes** and **Reset to Defaults**.
 
 ## Requirements
 
@@ -41,9 +45,9 @@ version, build number, Discord configuration status, bundle identifier, and proj
 - Swift 5.9 or later to build from source
 
 On first playback, allow **Accessibility** access when macOS asks. It is used only
-to read the title, artist, and album labels in YouTube Music's player bar. Until
-permission is granted, the app safely falls back to the English-only labels that
-Chrome sends to macOS.
+to read the title, artist, album, and exact current-song URL in YouTube Music's
+player bar. Until permission is granted, the app safely falls back to the
+English-only labels that Chrome sends to macOS and omits the song link.
 
 If macOS does not show the prompt, choose **Enable Exact YouTube Music Metadata…**
 from the menu-bar menu, then enable YT Music Companion in Accessibility settings.
@@ -98,7 +102,7 @@ DISCORD_CLIENT_ID=your_application_id .build/debug/YTMusicCompanion --discord
   memory, and verifies any public Discord artwork URL against those pixels.
 - `YouTubeMusicSource.swift`: accepts only the installed YouTube Music web app.
 - `YouTubeMusicPageMetadataResolver.swift`: reads the exact visible player-bar labels
-  through macOS Accessibility and rejects a stale previous-track page.
+  and watch URL through macOS Accessibility and rejects a stale previous-track page.
 - `OriginalScriptMetadataResolver.swift`: retains the optional storefront probe used
   by the `--metadata` development command; it is not used for displayed metadata.
 - `PlayerModel.swift`: coordinates playback polling, page metadata, lyrics, timing,

@@ -4,11 +4,12 @@ struct TrackMetadata: Equatable, Sendable {
     let title: String
     let artist: String
     let album: String
+    var trackURL: URL? = nil
 }
 
 extension NowPlaying {
     var metadata: TrackMetadata {
-        TrackMetadata(title: title, artist: artist, album: album)
+        TrackMetadata(title: title, artist: artist, album: album, trackURL: trackURL)
     }
 
     func applying(_ metadata: TrackMetadata) -> NowPlaying {
@@ -16,6 +17,7 @@ extension NowPlaying {
         copy.title = metadata.title
         copy.artist = metadata.artist
         copy.album = metadata.album
+        copy.trackURL = metadata.trackURL
         return copy
     }
 }

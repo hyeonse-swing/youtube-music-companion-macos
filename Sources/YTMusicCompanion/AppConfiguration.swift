@@ -5,7 +5,7 @@ enum AppConfiguration {
     static let bundleIdentifier = "com.hyeonseswing.YTMusicCompanion"
     static let repositoryURL = "https://github.com/hyeonse-swing/youtube-music-companion-macos"
     static let cacheDirectoryName = "YTMusicCompanion"
-    static let userAgent = "youtube-music-companion-macos/0.8.1 (\(repositoryURL))"
+    static let userAgent = "youtube-music-companion-macos/0.9.0 (\(repositoryURL))"
 
     /// Discord application IDs are public identifiers, not secrets. Release builds
     /// receive the value through Info.plist; `swift run` can use the environment.

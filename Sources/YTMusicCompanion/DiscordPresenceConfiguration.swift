@@ -13,7 +13,8 @@ struct DiscordPresenceConfiguration: Equatable {
         detailsTemplate: "{title}",
         stateTemplate: "{artist}",
         imageTextTemplate: "{album}",
-        showsPlaybackTime: true
+        showsPlaybackTime: true,
+        showsSongLink: true
     )
 
     static let supportedTokens = ["{title}", "{artist}", "{album}"]
@@ -22,6 +23,7 @@ struct DiscordPresenceConfiguration: Equatable {
     var stateTemplate: String
     var imageTextTemplate: String
     var showsPlaybackTime: Bool
+    var showsSongLink: Bool = true
 
     func content(for track: NowPlaying) -> DiscordPresenceContent {
         DiscordPresenceContent(
@@ -41,6 +43,7 @@ struct DiscordPresenceConfiguration: Equatable {
             stateTemplate,
             imageTextTemplate,
             showsPlaybackTime ? "time" : "no-time",
+            showsSongLink ? "link" : "no-link",
         ].joined(separator: "\u{1F}")
     }
 

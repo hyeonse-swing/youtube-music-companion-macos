@@ -6,8 +6,8 @@ cd "$(dirname "$0")/.."
 
 APP="YTMusicCompanion"
 BUNDLE="${APP}.app"
-VERSION="0.8.1"
-BUILD_VERSION="9"
+VERSION="0.9.0"
+BUILD_VERSION="10"
 BUNDLE_ID="com.hyeonseswing.YTMusicCompanion"
 DISPLAY_NAME="YT Music Companion"
 DISCORD_CLIENT_ID="${DISCORD_CLIENT_ID:-}"
@@ -64,7 +64,7 @@ cat > "${BUNDLE}/Contents/Info.plist" <<PLIST
     <key>NSHighResolutionCapable</key> <true/>
     <key>NSSupportsAutomaticGraphicsSwitching</key> <true/>
     <key>NSAccessibilityUsageDescription</key>
-    <string>Reads the exact title, artist, and album visible in the YouTube Music player bar.</string>
+    <string>Reads the exact title, artist, album, and song URL visible in the YouTube Music player bar.</string>
 </dict>
 </plist>
 PLIST

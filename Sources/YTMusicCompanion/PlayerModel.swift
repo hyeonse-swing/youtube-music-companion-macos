@@ -116,8 +116,8 @@ final class PlayerModel: ObservableObject {
     var hasContent: Bool { isPlaying && (!lines.isEmpty || isFetching) }
 
     /// Live sync correction applied to the current track (seconds). + = lyrics
-    /// earlier, − = later. Starts each track from `learnedOffset`; the user
-    /// refines it by scrolling over the overlay.
+    /// earlier, − = later. New tracks start at zero; a deliberately adjusted
+    /// track restores only its own saved value.
     @Published var syncOffset: Double
 
     // Interpolation state, refreshed on every poll.
@@ -204,7 +204,7 @@ final class PlayerModel: ObservableObject {
         displayMetadataSource = preferences.displayMetadataSource
         discordMetadataSource = preferences.discordMetadataSource
         discordPresenceConfiguration = preferences.discordPresenceConfiguration
-        syncOffset = preferences.learnedTimingOffset
+        syncOffset = 0
     }
 
     func start() {
@@ -641,25 +641,13 @@ final class PlayerModel: ObservableObject {
         )
     }
 
-    /// Persist a just-finished track's correction. The offset is saved per-song
-    /// (so it's exact next replay), and ONLY modest corrections ease the global
-    /// baseline — a large outlier like −5s stays with its song and can't drag the
-    /// songs that already play correctly.
+    /// Persist a just-finished track's correction for that track only.
     private func commit(for trackKey: String) {
         // Untouched track → leave the store alone (don't add a slot for every song
         // that merely played through).
         guard abs(syncOffset - loadedOffset) >= 0.05 else { return }
 
         preferences.saveTimingOffset(syncOffset, for: trackKey)
-
-        guard abs(syncOffset) <= 2.5 else { return }              // outlier → per-song only
-        var learnedOffset = preferences.learnedTimingOffset
-        if learnedOffset == 0 {
-            learnedOffset = syncOffset                            // first calibration → adopt
-        } else if syncOffset != learnedOffset {
-            learnedOffset += 0.4 * (syncOffset - learnedOffset)   // ease toward the new value
-        }
-        preferences.saveLearnedTimingOffset(learnedOffset)
     }
 
     private func tick() {

@@ -6,6 +6,9 @@ final class YouTubeMusicPageMetadataTests: XCTestCase {
         let metadata = YouTubeMusicPageMetadataResolver.metadata(
             documentTitle: "鋼の羽根 - Iron Feather | YouTube Music",
             playerLinks: ["Radwimps", "Forever Daze"],
+            pageURL: URL(
+                string: "https://music.youtube.com/watch?v=abc123&list=RDAMVMabc123"
+            ),
             source: track(
                 title: "Iron Feather",
                 artist: "Radwimps",
@@ -16,6 +19,10 @@ final class YouTubeMusicPageMetadataTests: XCTestCase {
         XCTAssertEqual(metadata?.title, "鋼の羽根 - Iron Feather")
         XCTAssertEqual(metadata?.artist, "Radwimps")
         XCTAssertEqual(metadata?.album, "Forever Daze")
+        XCTAssertEqual(
+            metadata?.trackURL,
+            URL(string: "https://music.youtube.com/watch?v=abc123")
+        )
     }
 
     func testUsesTheExactPlayerAlbumInsteadOfTheMediaRemoteCompilation() {
@@ -61,6 +68,21 @@ final class YouTubeMusicPageMetadataTests: XCTestCase {
 
         XCTAssertEqual(metadata?.artist, "Radwimps")
         XCTAssertEqual(metadata?.album, "Forever Daze")
+    }
+
+    func testRejectsANonYouTubeMusicWatchURL() {
+        let metadata = YouTubeMusicPageMetadataResolver.metadata(
+            documentTitle: "鋼の羽根 - Iron Feather | YouTube Music",
+            playerLinks: ["Radwimps", "Forever Daze"],
+            pageURL: URL(string: "https://example.com/watch?v=abc123"),
+            source: track(
+                title: "Iron Feather",
+                artist: "Radwimps",
+                album: "Forever Daze"
+            )
+        )
+
+        XCTAssertNil(metadata?.trackURL)
     }
 
     private func track(title: String, artist: String, album: String) -> NowPlaying {

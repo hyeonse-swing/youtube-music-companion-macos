@@ -22,6 +22,7 @@ final class DiscordPresenceConfigurationTests: XCTestCase {
         XCTAssertEqual(content.state, track.artist)
         XCTAssertEqual(content.imageText, track.album)
         XCTAssertTrue(DiscordPresenceConfiguration.standard.showsPlaybackTime)
+        XCTAssertTrue(DiscordPresenceConfiguration.standard.showsSongLink)
     }
 
     func testTemplatesReplaceEverySupportedTrackToken() {

@@ -13,6 +13,7 @@ struct NowPlaying: Equatable {
     var sourceBundle: String  // bundle id of the app playing this (parent app for PWAs); "" if unknown
     var sourcePID: Int32      // process id of the now-playing client; 0 if unknown. Used to
                               // disambiguate the older `app_mode_loader` Chromium PWA via `ps`.
+    var trackURL: URL? = nil  // exact public YouTube Music watch link when screen access supplies it
 
     /// Stable identity for "is this a different recording than before?"
     /// Album distinguishes common alternate releases while duration stays excluded:
@@ -33,6 +34,7 @@ struct NowPlaying: Equatable {
             && rate == other.rate
             && sourceBundle == other.sourceBundle
             && sourcePID == other.sourcePID
+            && trackURL == other.trackURL
     }
 }
 

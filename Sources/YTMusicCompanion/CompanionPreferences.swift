@@ -23,12 +23,16 @@ enum MetadataSourcePreference: String, CaseIterable, Identifiable {
     }
 
     func select(youtubeMusic: NowPlaying?, macOS: NowPlaying?) -> NowPlaying? {
-        switch self {
+        var selected = switch self {
         case .youtubeMusic:
             youtubeMusic ?? macOS
         case .macOS:
             macOS
         }
+        if let trackURL = youtubeMusic?.trackURL {
+            selected?.trackURL = trackURL
+        }
+        return selected
     }
 }
 
@@ -49,6 +53,7 @@ struct CompanionPreferences {
     private static let discordStateTemplateKey = "discordStateTemplate"
     private static let discordImageTextTemplateKey = "discordImageTextTemplate"
     private static let discordShowsPlaybackTimeKey = "discordShowsPlaybackTime"
+    private static let discordShowsSongLinkKey = "discordShowsSongLink"
 
     private let defaults: UserDefaults
     private var trackOffsets: [String: Double]
@@ -91,10 +96,12 @@ struct CompanionPreferences {
                 discordPresenceConfiguration.showsPlaybackTime,
                 forKey: Self.discordShowsPlaybackTimeKey
             )
+            defaults.set(
+                discordPresenceConfiguration.showsSongLink,
+                forKey: Self.discordShowsSongLinkKey
+            )
         }
     }
-
-    private(set) var learnedTimingOffset: Double
 
     init(defaults: UserDefaults = .standard) {
         self.defaults = defaults
@@ -117,16 +124,18 @@ struct CompanionPreferences {
             imageTextTemplate: defaults.string(forKey: Self.discordImageTextTemplateKey)
                 ?? standardPresence.imageTextTemplate,
             showsPlaybackTime: defaults.object(forKey: Self.discordShowsPlaybackTimeKey) as? Bool
-                ?? standardPresence.showsPlaybackTime
+                ?? standardPresence.showsPlaybackTime,
+            showsSongLink: defaults.object(forKey: Self.discordShowsSongLinkKey) as? Bool
+                ?? standardPresence.showsSongLink
         )
-        learnedTimingOffset = defaults.double(forKey: Self.learnedOffsetKey)
         trackOffsets = (defaults.dictionary(forKey: Self.trackOffsetsKey) ?? [:])
             .compactMapValues { ($0 as? NSNumber)?.doubleValue }
         lyricSelections = defaults.dictionary(forKey: Self.lyricSelectionsKey) as? [String: String] ?? [:]
+        defaults.removeObject(forKey: Self.learnedOffsetKey)
     }
 
     func timingOffset(for trackKey: String) -> Double {
-        trackOffsets[trackKey] ?? learnedTimingOffset
+        trackOffsets[trackKey] ?? 0
     }
 
     mutating func saveTimingOffset(_ offset: Double, for trackKey: String) {
@@ -134,20 +143,12 @@ struct CompanionPreferences {
         defaults.set(trackOffsets, forKey: Self.trackOffsetsKey)
     }
 
-    mutating func saveLearnedTimingOffset(_ offset: Double) {
-        learnedTimingOffset = offset
-        defaults.set(offset, forKey: Self.learnedOffsetKey)
-    }
-
     mutating func resetTimingOffset(for trackKey: String) {
-        // Keep an explicit zero so a non-zero learned baseline cannot reappear the
-        // next time this particular song plays.
         saveTimingOffset(0, for: trackKey)
     }
 
     mutating func resetAllTimingOffsets() {
         trackOffsets.removeAll()
-        learnedTimingOffset = 0
         defaults.removeObject(forKey: Self.trackOffsetsKey)
         defaults.removeObject(forKey: Self.learnedOffsetKey)
     }
@@ -168,6 +169,7 @@ struct CompanionPreferences {
             Self.discordStateTemplateKey,
             Self.discordImageTextTemplateKey,
             Self.discordShowsPlaybackTimeKey,
+            Self.discordShowsSongLinkKey,
         ].forEach(defaults.removeObject(forKey:))
     }
 

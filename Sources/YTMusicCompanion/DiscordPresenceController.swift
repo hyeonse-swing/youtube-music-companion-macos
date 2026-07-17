@@ -59,6 +59,7 @@ final class DiscordPresenceController {
         let publicationKey = [
             track.trackKey,
             track.duration > 0 ? "duration" : "no-duration",
+            track.trackURL?.absoluteString ?? "no-link",
             artworkURL ?? "fallback",
             configuration.publicationKey,
         ].joined(separator: "|")
@@ -126,6 +127,7 @@ final class DiscordPresenceController {
             : "\(track.title) - \(track.artist)"
         let image = artworkURL ?? YouTubeMusicSource.discordAssetKey
         let content = configuration.content(for: track)
+        let songURL = configuration.showsSongLink ? track.trackURL : nil
 
         return PresenceActivity(
             name: title,
@@ -136,7 +138,11 @@ final class DiscordPresenceController {
             largeImage: image,
             largeImageText: content.imageText,
             smallImage: YouTubeMusicSource.discordAssetKey,
-            smallImageText: YouTubeMusicSource.displayName
+            smallImageText: YouTubeMusicSource.displayName,
+            largeImageURL: songURL,
+            buttons: songURL.map {
+                [PresenceButton(label: "Listen on YouTube Music", url: $0)]
+            } ?? []
         )
     }
 

@@ -89,7 +89,8 @@ final class DiscordPresenceControllerTests: XCTestCase {
             detailsTemplate: "Listening: {title}",
             stateTemplate: "{artist} — {album}",
             imageTextTemplate: "Cover: {album}",
-            showsPlaybackTime: false
+            showsPlaybackTime: false,
+            showsSongLink: false
         )
 
         controller.update(for: makeTrack(), configuration: configuration)
@@ -99,6 +100,7 @@ final class DiscordPresenceControllerTests: XCTestCase {
         XCTAssertEqual(publisher.activities.first?.largeImageText, "Cover: Test Album")
         XCTAssertNil(publisher.activities.first?.start)
         XCTAssertNil(publisher.activities.first?.end)
+        XCTAssertEqual(publisher.activities.first?.buttons, [])
     }
 
     func testChangingCustomizationRepublishesTheSameTrack() {
@@ -118,6 +120,32 @@ final class DiscordPresenceControllerTests: XCTestCase {
 
         XCTAssertEqual(publisher.activities.count, 2)
         XCTAssertEqual(publisher.activities.last?.details, "🎵 Test Song")
+    }
+
+    func testPublishesTheExactYouTubeMusicSongLink() {
+        let publisher = StubPublisher()
+        let controller = DiscordPresenceController(
+            publisher: publisher,
+            artworkResolver: StubArtworkResolver()
+        )
+        var track = makeTrack()
+        track.trackURL = URL(string: "https://music.youtube.com/watch?v=abc123")
+
+        controller.update(for: track)
+
+        XCTAssertEqual(
+            publisher.activities.first?.buttons,
+            [
+                PresenceButton(
+                    label: "Listen on YouTube Music",
+                    url: URL(string: "https://music.youtube.com/watch?v=abc123")!
+                ),
+            ]
+        )
+        XCTAssertEqual(
+            publisher.activities.first?.largeImageURL,
+            URL(string: "https://music.youtube.com/watch?v=abc123")
+        )
     }
 
     private func makeTrack() -> NowPlaying {

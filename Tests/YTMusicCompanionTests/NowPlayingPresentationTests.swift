@@ -24,6 +24,10 @@ final class NowPlayingPresentationTests: XCTestCase {
         var longer = original
         longer.duration += 1
         XCTAssertFalse(original.hasSamePresentation(as: longer))
+
+        var linked = original
+        linked.trackURL = URL(string: "https://music.youtube.com/watch?v=abc123")
+        XCTAssertFalse(original.hasSamePresentation(as: linked))
     }
 
     private func makeTrack(

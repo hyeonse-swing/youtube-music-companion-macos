@@ -33,7 +33,8 @@ final class CompanionPreferencesTests: XCTestCase {
             detailsTemplate: "Listening to {title}",
             stateTemplate: "by {artist}",
             imageTextTemplate: "from {album}",
-            showsPlaybackTime: false
+            showsPlaybackTime: false,
+            showsSongLink: false
         )
         var preferences = CompanionPreferences(defaults: defaults)
         preferences.discordPresenceConfiguration = customized
@@ -49,7 +50,8 @@ final class CompanionPreferencesTests: XCTestCase {
             detailsTemplate: "Custom {title}",
             stateTemplate: "Custom {artist}",
             imageTextTemplate: "Custom {album}",
-            showsPlaybackTime: false
+            showsPlaybackTime: false,
+            showsSongLink: false
         )
 
         preferences.resetDiscordPresenceConfiguration()
@@ -88,8 +90,11 @@ final class CompanionPreferencesTests: XCTestCase {
         let youtubeMusic = NowPlaying(
             title: "原題 - English Title", artist: "アーティスト", album: "Original Album",
             duration: 180, elapsed: 10, timestamp: 100, isPlaying: true, rate: 1,
-            sourceBundle: "com.google.Chrome", sourcePID: 1
+            sourceBundle: "com.google.Chrome", sourcePID: 1,
+            trackURL: URL(string: "https://music.youtube.com/watch?v=abc123")
         )
+        var macOSWithTrackURL = macOS
+        macOSWithTrackURL.trackURL = youtubeMusic.trackURL
 
         XCTAssertEqual(
             MetadataSourcePreference.youtubeMusic.select(
@@ -100,7 +105,7 @@ final class CompanionPreferencesTests: XCTestCase {
         )
         XCTAssertEqual(
             MetadataSourcePreference.macOS.select(youtubeMusic: youtubeMusic, macOS: macOS),
-            macOS
+            macOSWithTrackURL
         )
         XCTAssertEqual(
             MetadataSourcePreference.youtubeMusic.select(youtubeMusic: nil, macOS: macOS),
@@ -119,15 +124,25 @@ final class CompanionPreferencesTests: XCTestCase {
         XCTAssertEqual(preferences.timingOffset(for: "other|song|album"), -0.75)
     }
 
-    func testResetAllTimingClearsSongOffsetsAndLearnedBaseline() {
+    func testUnknownTracksStartAtZeroAndRemoveTheLegacyLearnedBaseline() {
+        defaults.set(-1.26, forKey: "syncLearnedOffset")
+        var preferences = CompanionPreferences(defaults: defaults)
+        preferences.saveTimingOffset(0.75, for: "known|song|album")
+
+        XCTAssertEqual(preferences.timingOffset(for: "unknown|song|album"), 0)
+        XCTAssertEqual(preferences.timingOffset(for: "known|song|album"), 0.75)
+        XCTAssertNil(defaults.object(forKey: "syncLearnedOffset"))
+    }
+
+    func testResetAllTimingClearsSongOffsetsAndLegacyBaseline() {
         var preferences = CompanionPreferences(defaults: defaults)
         preferences.saveTimingOffset(0.8, for: "artist|song|album")
-        preferences.saveLearnedTimingOffset(0.35)
+        defaults.set(0.35, forKey: "syncLearnedOffset")
 
         preferences.resetAllTimingOffsets()
 
         XCTAssertEqual(preferences.timingOffset(for: "artist|song|album"), 0)
-        XCTAssertEqual(preferences.learnedTimingOffset, 0)
+        XCTAssertNil(defaults.object(forKey: "syncLearnedOffset"))
     }
 
     func testLyricCandidateChoicePersistsPerTrack() {

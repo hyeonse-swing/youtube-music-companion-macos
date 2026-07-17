@@ -23,6 +23,7 @@ final class YouTubeMusicPageMetadataResolver: TrackMetadataResolving, @unchecked
         return Self.metadata(
             documentTitle: snapshot.documentTitle,
             playerLinks: snapshot.playerLinks,
+            pageURL: snapshot.pageURL,
             source: track
         )
     }
@@ -30,6 +31,7 @@ final class YouTubeMusicPageMetadataResolver: TrackMetadataResolving, @unchecked
     static func metadata(
         documentTitle: String,
         playerLinks: [String],
+        pageURL: URL? = nil,
         source: NowPlaying
     ) -> TrackMetadata? {
         guard let title = trackTitle(from: documentTitle) else { return nil }
@@ -38,8 +40,26 @@ final class YouTubeMusicPageMetadataResolver: TrackMetadataResolving, @unchecked
         return TrackMetadata(
             title: title,
             artist: playerLinks.first ?? source.artist,
-            album: playerLinks.dropFirst().first ?? source.album
+            album: playerLinks.dropFirst().first ?? source.album,
+            trackURL: normalizedTrackURL(from: pageURL)
         )
+    }
+
+    private static func normalizedTrackURL(from pageURL: URL?) -> URL? {
+        guard
+            let pageURL,
+            let components = URLComponents(url: pageURL, resolvingAgainstBaseURL: false),
+            components.scheme?.lowercased() == "https",
+            components.host?.lowercased() == "music.youtube.com",
+            components.path == "/watch",
+            let videoID = components.queryItems?
+                .first(where: { $0.name == "v" })?.value,
+            !videoID.isEmpty
+        else { return nil }
+
+        var normalized = URLComponents(string: "https://music.youtube.com/watch")
+        normalized?.queryItems = [URLQueryItem(name: "v", value: videoID)]
+        return normalized?.url
     }
 
     private static func trackTitle(from documentTitle: String) -> String? {
@@ -96,6 +116,7 @@ enum AccessibilityPermission {
 private struct YouTubeMusicAccessibilitySnapshot {
     let documentTitle: String
     let playerLinks: [String]
+    let pageURL: URL?
 }
 
 private enum YouTubeMusicAccessibility {
@@ -105,6 +126,7 @@ private enum YouTubeMusicAccessibility {
     private static let descriptionAttribute = kAXDescriptionAttribute as String
     private static let roleAttribute = kAXRoleAttribute as String
     private static let titleAttribute = kAXTitleAttribute as String
+    private static let urlAttribute = kAXURLAttribute as String
     private static let windowsAttribute = kAXWindowsAttribute as String
 
     static func snapshot(pid: Int32) -> YouTubeMusicAccessibilitySnapshot? {
@@ -118,7 +140,8 @@ private enum YouTubeMusicAccessibility {
             let playerLinks = playerLinkLabels(in: descendants)
             return YouTubeMusicAccessibilitySnapshot(
                 documentTitle: documentTitle,
-                playerLinks: playerLinks
+                playerLinks: playerLinks,
+                pageURL: pageURL(in: descendants)
             )
         }
         return nil
@@ -127,6 +150,23 @@ private enum YouTubeMusicAccessibility {
     private static func documentTitle(in elements: [AXUIElement]) -> String? {
         elements.first { role(of: $0) == webAreaRole }
             .flatMap { string($0, attribute: titleAttribute) }
+    }
+
+    private static func pageURL(in elements: [AXUIElement]) -> URL? {
+        guard let webArea = elements.first(where: { role(of: $0) == webAreaRole }) else {
+            return nil
+        }
+        var value: CFTypeRef?
+        guard
+            AXUIElementCopyAttributeValue(
+                webArea,
+                urlAttribute as CFString,
+                &value
+            ) == .success
+        else { return nil }
+        if let url = value as? URL { return url }
+        if let string = value as? String { return URL(string: string) }
+        return nil
     }
 
     private static func playerLinkLabels(in elements: [AXUIElement]) -> [String] {

@@ -2,6 +2,11 @@ import Foundation
 
 // IPC framing approach adapted from SwordRPC by Alejandro Alonso (MIT).
 
+struct PresenceButton: Equatable {
+    let label: String
+    let url: URL
+}
+
 struct PresenceActivity: Equatable {
     var name: String
     var details: String
@@ -12,6 +17,8 @@ struct PresenceActivity: Equatable {
     var largeImageText: String?
     var smallImage: String?
     var smallImageText: String?
+    var largeImageURL: URL? = nil
+    var buttons: [PresenceButton] = []
 }
 
 protocol PresencePublishing: AnyObject {
@@ -106,10 +113,11 @@ final class DiscordRPC: PresencePublishing {
         let details: String
         let state: String
         let timestamps: Timestamps?
-        // Built whenever ANY of the four asset fields is set (so a track with no cover
+        // Built whenever ANY asset field is set (so a track with no cover
         // still ships its source badge); omitted entirely only when all are nil. Each
         // wire key is itself optional and drops out of the JSON when nil.
         let assets: Assets?
+        let buttons: [Button]?
 
         struct Timestamps: Encodable {
             // Unix epoch SECONDS. Omitted keys (nil) drop out of the JSON.
@@ -125,12 +133,19 @@ final class DiscordRPC: PresencePublishing {
             let largeText: String?
             let smallImage: String?
             let smallText: String?
+            let largeURL: String?
             enum CodingKeys: String, CodingKey {
                 case largeImage = "large_image"
                 case largeText = "large_text"
                 case smallImage = "small_image"
                 case smallText = "small_text"
+                case largeURL = "large_url"
             }
+        }
+
+        struct Button: Encodable {
+            let label: String
+            let url: String
         }
     }
 
@@ -266,48 +281,29 @@ final class DiscordRPC: PresencePublishing {
 
     // MARK: - Activity send (on `queue`)
 
+    static func encodedSetActivityCommand(
+        _ activity: PresenceActivity?,
+        pid: Int32 = ProcessInfo.processInfo.processIdentifier,
+        nonce: String = UUID().uuidString
+    ) -> Data? {
+        let command = SetActivityCommand(
+            cmd: "SET_ACTIVITY",
+            args: SetActivityArgs(
+                pid: pid,
+                activity: activity.map(Self.activityPayload)
+            ),
+            nonce: nonce
+        )
+        return try? JSONEncoder().encode(command)
+    }
+
     /// Build + send a SET_ACTIVITY frame. Pass nil to clear. On any write/read error
     /// we mark disconnected so the next update retries the whole connection.
     private func sendActivityLocked(_ activity: PresenceActivity?) -> Bool {
-        let payload: ActivityPayload?
-        if let a = activity {
-            // TIMESTAMP UNIT: Discord's LOCAL IPC SET_ACTIVITY takes Unix epoch
-            // SECONDS (the Gateway/REST API uses milliseconds — different transport).
-            // We ship seconds. If the progress bar ever renders wrong, multiply both
-            // by 1000 here to switch to milliseconds.
-            let start = a.start.map { Int($0.timeIntervalSince1970) }
-            let end = a.end.map { Int($0.timeIntervalSince1970) }
-            let timestamps = (start != nil || end != nil)
-                ? ActivityPayload.Timestamps(start: start, end: end) : nil
-            // Attach `assets` when ANY image/text field is set — so a no-cover track
-            // still ships its source badge. Omit it entirely only when all are nil.
-            let hasAnyAsset = a.largeImage != nil || a.largeImageText != nil
-                || a.smallImage != nil || a.smallImageText != nil
-            let assets = hasAnyAsset
-                ? ActivityPayload.Assets(
-                    largeImage: a.largeImage,
-                    largeText: a.largeImageText.map(Self.clamp),
-                    smallImage: a.smallImage,
-                    smallText: a.smallImageText.map(Self.clamp))
-                : nil
-            payload = ActivityPayload(
-                type: Self.listeningType,
-                name: Self.clamp(a.name),
-                details: Self.clamp(a.details),
-                state: Self.clamp(a.state),
-                timestamps: timestamps,
-                assets: assets
-            )
-        } else {
-            payload = nil
-        }
-
-        let command = SetActivityCommand(
-            cmd: "SET_ACTIVITY",
-            args: SetActivityArgs(pid: ProcessInfo.processInfo.processIdentifier, activity: payload),
-            nonce: UUID().uuidString
-        )
-        guard let body = try? JSONEncoder().encode(command), writeFrame(.frame, body) else {
+        guard
+            let body = Self.encodedSetActivityCommand(activity),
+            writeFrame(.frame, body)
+        else {
             disconnectLocked()
             return false
         }
@@ -316,6 +312,53 @@ final class DiscordRPC: PresencePublishing {
         // keeps the connection healthy on a quiet socket.
         servicePendingFrame()
         return true
+    }
+
+    private static func activityPayload(from activity: PresenceActivity) -> ActivityPayload {
+        // TIMESTAMP UNIT: Discord's LOCAL IPC SET_ACTIVITY takes Unix epoch
+        // SECONDS (the Gateway/REST API uses milliseconds — different transport).
+        let start = activity.start.map { Int($0.timeIntervalSince1970) }
+        let end = activity.end.map { Int($0.timeIntervalSince1970) }
+        let timestamps = (start != nil || end != nil)
+            ? ActivityPayload.Timestamps(start: start, end: end) : nil
+
+        let hasAnyAsset = activity.largeImage != nil || activity.largeImageText != nil
+            || activity.smallImage != nil || activity.smallImageText != nil
+            || activity.largeImageURL != nil
+        let assets = hasAnyAsset
+            ? ActivityPayload.Assets(
+                largeImage: activity.largeImage,
+                largeText: activity.largeImageText.map(Self.clamp),
+                smallImage: activity.smallImage,
+                smallText: activity.smallImageText.map(Self.clamp),
+                largeURL: activity.largeImageURL?.absoluteString
+            )
+            : nil
+
+        return ActivityPayload(
+            type: Self.listeningType,
+            name: Self.clamp(activity.name),
+            details: Self.clamp(activity.details),
+            state: Self.clamp(activity.state),
+            timestamps: timestamps,
+            assets: assets,
+            buttons: Self.buttonPayloads(from: activity.buttons)
+        )
+    }
+
+    private static func buttonPayloads(
+        from buttons: [PresenceButton]
+    ) -> [ActivityPayload.Button]? {
+        let payloads = buttons.prefix(2).compactMap { button -> ActivityPayload.Button? in
+            guard button.url.scheme?.lowercased() == "https" else { return nil }
+            let label = button.label.trimmingCharacters(in: .whitespacesAndNewlines)
+            guard !label.isEmpty else { return nil }
+            return ActivityPayload.Button(
+                label: String(label.prefix(32)),
+                url: button.url.absoluteString
+            )
+        }
+        return payloads.isEmpty ? nil : payloads
     }
 
     /// Drain Discord's reply after a send and handle PING→PONG / CLOSE. A timeout here
