@@ -44,6 +44,22 @@ private struct CompanionSettingsView: View {
     }
 }
 
+private struct SettingsEmptyState: View {
+    let title: String
+    let systemImage: String
+    let description: String
+
+    var body: some View {
+        ContentUnavailableView(
+            title,
+            systemImage: systemImage,
+            description: Text(description)
+        )
+        .frame(maxWidth: .infinity)
+        .frame(height: 180)
+    }
+}
+
 private struct LyricsSettingsView: View {
     @ObservedObject var model: PlayerModel
     @State private var confirmsResetAllTiming = false
@@ -101,12 +117,11 @@ private struct LyricsSettingsView: View {
     @ViewBuilder
     private var lyricVersionContent: some View {
         if !model.hasNowPlaying {
-            ContentUnavailableView(
-                "Nothing Playing",
+            SettingsEmptyState(
+                title: "Nothing Playing",
                 systemImage: "captions.bubble",
-                description: Text("Start a song in YouTube Music to choose its synced lyrics.")
+                description: "Start a song in YouTube Music to choose its synced lyrics."
             )
-            .frame(height: 180)
         } else if model.lyricCandidates.isEmpty {
             VStack(spacing: 12) {
                 if model.isFetchingLyricCandidates {
@@ -233,12 +248,11 @@ private struct MetadataSettingsView: View {
                         unavailableText: "Unavailable"
                     )
                 } else {
-                    ContentUnavailableView(
-                        "Nothing Playing",
+                    SettingsEmptyState(
+                        title: "Nothing Playing",
                         systemImage: "music.note",
-                        description: Text("Start a song to compare the available metadata.")
+                        description: "Start a song to compare the available metadata."
                     )
-                    .frame(height: 160)
                 }
             }
 
