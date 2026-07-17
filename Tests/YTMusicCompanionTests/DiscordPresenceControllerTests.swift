@@ -148,6 +148,79 @@ final class DiscordPresenceControllerTests: XCTestCase {
         )
     }
 
+    func testPausedTrackUsesTheConfiguredVisibilityPolicy() {
+        let hiddenPublisher = StubPublisher()
+        let hiddenController = DiscordPresenceController(
+            publisher: hiddenPublisher,
+            artworkResolver: StubArtworkResolver()
+        )
+        var playing = makeTrack()
+        hiddenController.update(for: playing)
+        hiddenPublisher.completeNext(with: true)
+        drainMainQueue()
+
+        playing.isPlaying = false
+        playing.rate = 0
+        var hiddenConfiguration = DiscordPresenceConfiguration.standard
+        hiddenConfiguration.pausePolicy = .hideImmediately
+        hiddenController.update(
+            for: playing,
+            configuration: hiddenConfiguration
+        )
+        XCTAssertEqual(hiddenPublisher.clearCount, 1)
+
+        let retainedPublisher = StubPublisher()
+        let retainedController = DiscordPresenceController(
+            publisher: retainedPublisher,
+            artworkResolver: StubArtworkResolver()
+        )
+        var retainedConfiguration = DiscordPresenceConfiguration.standard
+        retainedConfiguration.pausePolicy = .keepVisible
+        playing.isPlaying = true
+        playing.rate = 1
+        retainedController.update(
+            for: playing,
+            configuration: retainedConfiguration
+        )
+        retainedPublisher.completeNext(with: true)
+        drainMainQueue()
+        playing.isPlaying = false
+        playing.rate = 0
+        retainedController.update(
+            for: playing,
+            configuration: retainedConfiguration
+        )
+        XCTAssertEqual(retainedPublisher.clearCount, 0)
+        XCTAssertEqual(retainedPublisher.activities.count, 1)
+    }
+
+    func testManualActivityReplacesLiveAndDeduplicatesTheSameSession() throws {
+        let publisher = StubPublisher()
+        let controller = DiscordPresenceController(
+            publisher: publisher,
+            artworkResolver: StubArtworkResolver()
+        )
+        controller.update(for: makeTrack())
+        publisher.completeNext(with: true)
+        drainMainQueue()
+
+        let manual = ManualDiscordPresence.example
+        let activity = try XCTUnwrap(
+            manual.activity(startedAt: Date(timeIntervalSince1970: 2_000))
+        )
+        controller.publishManual(activity, sessionKey: "session-1")
+        publisher.completeNext(with: true)
+        drainMainQueue()
+        controller.publishManual(activity, sessionKey: "session-1")
+
+        XCTAssertEqual(publisher.activities.count, 2)
+        XCTAssertEqual(publisher.activities.last?.details, manual.title)
+        XCTAssertEqual(
+            publisher.activities.last?.smallImageText,
+            "Manual presence · YT Music Companion"
+        )
+    }
+
     private func makeTrack() -> NowPlaying {
         NowPlaying(
             title: "Test Song",

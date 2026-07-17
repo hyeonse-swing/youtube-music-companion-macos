@@ -1,10 +1,12 @@
 import AppKit
 import SwiftUI
+import UniformTypeIdentifiers
 
 private enum SettingsTab: String, CaseIterable, Identifiable {
     case lyrics = "Lyrics"
     case metadata = "Metadata"
     case discord = "Discord"
+    case diagnostics = "Diagnostics"
 
     var id: Self { self }
 }
@@ -22,7 +24,7 @@ private struct CompanionSettingsView: View {
             }
             .labelsHidden()
             .pickerStyle(.segmented)
-            .frame(width: 310)
+            .frame(width: 420)
 
             selectedContent
                 .frame(maxWidth: .infinity, maxHeight: .infinity)
@@ -40,6 +42,8 @@ private struct CompanionSettingsView: View {
             MetadataSettingsView(model: model)
         case .discord:
             DiscordSettingsView(model: model)
+        case .diagnostics:
+            DiagnosticsSettingsView(model: model)
         }
     }
 }
@@ -63,10 +67,28 @@ private struct SettingsEmptyState: View {
 private struct LyricsSettingsView: View {
     @ObservedObject var model: PlayerModel
     @State private var confirmsResetAllTiming = false
+    @State private var confirmsRemoveCustomLyrics = false
+    @State private var fileAlert: LyricsFileAlert?
 
     var body: some View {
         Form {
             Section("Appearance") {
+                Picker(
+                    "Overlay preset",
+                    selection: Binding(
+                        get: { model.overlayPreset },
+                        set: { model.applyOverlayPreset($0) }
+                    )
+                ) {
+                    ForEach(OverlayPreset.allCases) { preset in
+                        Text(preset.displayName).tag(preset)
+                    }
+                }
+
+                Text(model.overlayPreset.helpText)
+                    .font(.caption)
+                    .foregroundStyle(.secondary)
+
                 HStack(spacing: 12) {
                     Image(systemName: "textformat.size.smaller")
                         .accessibilityHidden(true)
@@ -81,7 +103,121 @@ private struct LyricsSettingsView: View {
                     Text("\(Int(model.lyricsFontSize)) pt")
                         .monospacedDigit()
                         .frame(width: 44, alignment: .trailing)
-                    Button("Reset") { model.resetLyricsFontSize() }
+                    Button("Reset Size") { model.resetLyricsFontSize() }
+                }
+
+                Toggle(
+                    "Show karaoke line progress",
+                    isOn: $model.karaokeModeEnabled
+                )
+                Text(
+                    "Highlights the current line from left to right using line timestamps. "
+                        + "It estimates the pacing because standard LRC files do not "
+                        + "contain word-level timing."
+                )
+                .font(.caption)
+                .foregroundStyle(.secondary)
+
+                HStack {
+                    Spacer()
+                    Button("Reset Appearance") {
+                        model.resetOverlayAppearance()
+                    }
+                    .disabled(
+                        model.overlayPreset == .balanced
+                            && model.lyricsFontSize
+                                == CompanionPreferences.defaultLyricsFontSize
+                            && !model.karaokeModeEnabled
+                    )
+                }
+            }
+
+            Section("Lyric Layers") {
+                LabeledContent("Original lyrics") {
+                    Label("Always shown", systemImage: "checkmark.circle")
+                        .foregroundStyle(.secondary)
+                }
+
+                Toggle("Show romanization", isOn: $model.showsRomanizedLyrics)
+                Text(
+                    "Adds a pronunciation line only when it differs from the original. "
+                        + "A timing-matched lyric version is preferred when available."
+                )
+                .font(.caption)
+                .foregroundStyle(.secondary)
+
+                if #available(macOS 15.0, *) {
+                    Toggle("Show translation", isOn: $model.showsTranslatedLyrics)
+
+                    Picker(
+                        "Translate to",
+                        selection: $model.translationTargetLanguage
+                    ) {
+                        ForEach(LyricTranslationLanguage.allCases) { language in
+                            Text(language.displayName).tag(language)
+                        }
+                    }
+                    .disabled(!model.showsTranslatedLyrics)
+
+                    Picker(
+                        "Translation style",
+                        selection: $model.translationTone
+                    ) {
+                        ForEach(LyricTranslationTone.allCases) { tone in
+                            Text(tone.displayName).tag(tone)
+                        }
+                    }
+                    .disabled(!model.showsTranslatedLyrics)
+
+                    Text(
+                        "Natural lyrics keeps Korean sentence endings in one "
+                            + "conversational tone. Other target languages keep "
+                            + "the system translator’s wording."
+                    )
+                    .font(.caption)
+                    .foregroundStyle(.secondary)
+                    .disabled(!model.showsTranslatedLyrics)
+
+                    if model.showsTranslatedLyrics {
+                        HStack(spacing: 8) {
+                            if model.lyricTranslationStatus == .translating {
+                                ProgressView()
+                                    .controlSize(.small)
+                            } else {
+                                Image(
+                                    systemName: model.lyricTranslationStatus.systemImage
+                                )
+                                .accessibilityHidden(true)
+                            }
+                            Text(model.lyricTranslationStatus.displayName)
+                                .foregroundStyle(.secondary)
+                                .lineLimit(2)
+                        }
+                        .font(.caption)
+                        .accessibilityElement(children: .combine)
+                    }
+                } else {
+                    Toggle(
+                        "Show translation",
+                        isOn: $model.showsTranslatedLyrics
+                    )
+                    .disabled(true)
+                    Text("On-device lyric translation requires macOS 15 or later.")
+                        .font(.caption)
+                        .foregroundStyle(.secondary)
+                }
+
+                HStack {
+                    Spacer()
+                    Button("Use Original Only") {
+                        model.resetLyricLayers()
+                    }
+                    .disabled(
+                        !model.showsRomanizedLyrics
+                            && !model.showsTranslatedLyrics
+                            && model.translationTargetLanguage == .system
+                            && model.translationTone == .naturalLyrics
+                    )
                 }
             }
 
@@ -101,6 +237,42 @@ private struct LyricsSettingsView: View {
                 }
             }
 
+            Section("Local Lyrics") {
+                LabeledContent("Current source") {
+                    Label(
+                        model.customLyricsSourceName ?? "Online or saved lyrics",
+                        systemImage: model.hasCustomLyrics
+                            ? "doc.badge.checkmark"
+                            : "network"
+                    )
+                    .lineLimit(1)
+                    .help(model.customLyricsSourceName ?? "Lyrics selected from LRCLIB")
+                }
+
+                HStack {
+                    Text(
+                        model.hasNowPlaying
+                            ? "Imported LRC files are copied to this Mac and pinned to this song."
+                            : "Start a song to import or export its synced lyrics."
+                    )
+                    .foregroundStyle(.secondary)
+                    Spacer()
+                    Button(model.hasCustomLyrics ? "Replace LRC…" : "Import LRC…") {
+                        importLyrics()
+                    }
+                    .disabled(!model.hasNowPlaying)
+                    Button("Export Current…") {
+                        exportLyrics()
+                    }
+                    .disabled(!model.canExportLyrics)
+                    if model.hasCustomLyrics {
+                        Button("Use Online…", role: .destructive) {
+                            confirmsRemoveCustomLyrics = true
+                        }
+                    }
+                }
+            }
+
             Section("Lyric Version") {
                 lyricVersionContent
             }
@@ -111,6 +283,28 @@ private struct LyricsSettingsView: View {
             Button("Reset All", role: .destructive) { model.resetAllLyricsTiming() }
         } message: {
             Text("This clears the timing adjustment for every song and the learned default.")
+        }
+        .alert("Use online lyrics instead?", isPresented: $confirmsRemoveCustomLyrics) {
+            Button("Cancel", role: .cancel) {}
+            Button("Remove Imported Lyrics", role: .destructive) {
+                do {
+                    try model.removeCustomLyrics()
+                } catch {
+                    fileAlert = LyricsFileAlert(
+                        title: "Couldn’t Remove Lyrics",
+                        message: error.localizedDescription
+                    )
+                }
+            }
+        } message: {
+            Text("The imported file for this song will be removed from the app.")
+        }
+        .alert(item: $fileAlert) { item in
+            Alert(
+                title: Text(item.title),
+                message: Text(item.message),
+                dismissButton: .default(Text("OK"))
+            )
         }
     }
 
@@ -127,6 +321,24 @@ private struct LyricsSettingsView: View {
                 if model.isFetchingLyricCandidates {
                     ProgressView("Finding synced lyrics…")
                         .controlSize(.small)
+                } else if model.hasCustomLyrics {
+                    ContentUnavailableView(
+                        "Using Imported Lyrics",
+                        systemImage: "doc.badge.checkmark",
+                        description: Text(
+                            model.lyricCandidateStatusMessage
+                                ?? "The imported LRC file is pinned to this song."
+                        )
+                    )
+                } else if !model.lines.isEmpty {
+                    ContentUnavailableView(
+                        "Using Saved Lyrics",
+                        systemImage: "checkmark.circle",
+                        description: Text(
+                            model.lyricCandidateStatusMessage
+                                ?? "Saved lyrics are active for this song."
+                        )
+                    )
                 } else {
                     ContentUnavailableView(
                         "No Lyric Choices",
@@ -137,14 +349,20 @@ private struct LyricsSettingsView: View {
                         )
                     )
                 }
-                Button("Try Again") { model.reloadLyricCandidates() }
+                Button(model.lines.isEmpty ? "Try Again" : "Load Lyric Choices") {
+                    model.reloadLyricCandidates()
+                }
                     .disabled(model.isFetchingLyricCandidates)
             }
             .frame(maxWidth: .infinity, minHeight: 180)
         } else {
             VStack(alignment: .leading, spacing: 10) {
                 HStack {
-                    Text("Choose the LRCLIB result used for this song. Your choice is remembered.")
+                    Text(
+                        model.hasCustomLyrics
+                            ? "Imported lyrics are active. Choose an online version to replace them."
+                            : "Choose the LRCLIB result used for this song. Your choice is remembered."
+                    )
                         .foregroundStyle(.secondary)
                     Spacer()
                     if model.isFetchingLyricCandidates {
@@ -176,6 +394,66 @@ private struct LyricsSettingsView: View {
             set: { if let id = $0 { model.selectLyricCandidate(id) } }
         )
     }
+
+    private func importLyrics() {
+        let panel = NSOpenPanel()
+        panel.title = model.hasCustomLyrics ? "Replace Imported Lyrics" : "Import Synced Lyrics"
+        panel.message = "Choose a UTF-8 LRC file with timestamped lyric lines."
+        panel.prompt = model.hasCustomLyrics ? "Replace" : "Import"
+        panel.allowedContentTypes = [UTType(filenameExtension: "lrc") ?? .plainText]
+        panel.allowsMultipleSelection = false
+        panel.canChooseDirectories = false
+
+        let completion: (NSApplication.ModalResponse) -> Void = { response in
+            guard response == .OK, let url = panel.url else { return }
+            do {
+                try model.importCustomLyrics(from: url)
+            } catch {
+                fileAlert = LyricsFileAlert(
+                    title: "Couldn’t Import Lyrics",
+                    message: error.localizedDescription
+                )
+            }
+        }
+        if let window = NSApp.keyWindow {
+            panel.beginSheetModal(for: window, completionHandler: completion)
+        } else {
+            completion(panel.runModal())
+        }
+    }
+
+    private func exportLyrics() {
+        let panel = NSSavePanel()
+        panel.title = "Export Synced Lyrics"
+        panel.message = "Save the currently displayed lyrics as a UTF-8 LRC file."
+        panel.prompt = "Export"
+        panel.allowedContentTypes = [UTType(filenameExtension: "lrc") ?? .plainText]
+        panel.nameFieldStringValue = model.suggestedLyricsFilename
+        panel.canCreateDirectories = true
+
+        let completion: (NSApplication.ModalResponse) -> Void = { response in
+            guard response == .OK, let url = panel.url else { return }
+            do {
+                try model.exportCurrentLyrics(to: url)
+            } catch {
+                fileAlert = LyricsFileAlert(
+                    title: "Couldn’t Export Lyrics",
+                    message: error.localizedDescription
+                )
+            }
+        }
+        if let window = NSApp.keyWindow {
+            panel.beginSheetModal(for: window, completionHandler: completion)
+        } else {
+            completion(panel.runModal())
+        }
+    }
+}
+
+private struct LyricsFileAlert: Identifiable {
+    let id = UUID()
+    let title: String
+    let message: String
 }
 
 private struct LyricCandidateRow: View {
@@ -274,12 +552,24 @@ private struct MetadataSettingsView: View {
 }
 
 private struct DiscordSettingsView: View {
+    private enum EditorMode: String, CaseIterable, Identifiable {
+        case live = "Live"
+        case manual = "Manual"
+
+        var id: Self { self }
+    }
+
     @ObservedObject var model: PlayerModel
     @State private var draft: DiscordPresenceConfiguration
+    @State private var manualDraft: ManualDiscordPresence
+    @State private var editorMode = EditorMode.live
+    @State private var manualError: String?
+    @State private var confirmsClearPrivacy = false
 
     init(model: PlayerModel) {
         self.model = model
         _draft = State(initialValue: model.discordPresenceConfiguration)
+        _manualDraft = State(initialValue: Self.manualDraft(from: model.discordPreviewTrack))
     }
 
     var body: some View {
@@ -293,65 +583,259 @@ private struct DiscordSettingsView: View {
                         systemImage: "exclamationmark.triangle"
                     )
                     .foregroundStyle(.secondary)
-                }
-            }
-
-            Section("Metadata Source") {
-                MetadataSourcePicker(selection: $model.discordMetadataSource)
-                Text(model.discordMetadataSource.helpText)
-                    .font(.caption)
+                } else {
+                    Label(
+                        model.discordConnectionStatus.displayName,
+                        systemImage: model.discordConnectionStatus.systemImage
+                    )
                     .foregroundStyle(.secondary)
-            }
-
-            Section("Custom Text") {
-                TextField("Top line", text: $draft.detailsTemplate)
-                    .accessibilityHint("Supports title, artist, and album tokens")
-                TextField("Second line", text: $draft.stateTemplate)
-                    .accessibilityHint("Supports title, artist, and album tokens")
-                TextField("Cover description", text: $draft.imageTextTemplate)
-                    .accessibilityHint("Supports title, artist, and album tokens")
-                Toggle("Show playback time", isOn: $draft.showsPlaybackTime)
-                Toggle("Show YouTube Music song link", isOn: $draft.showsSongLink)
-
-                VStack(alignment: .leading, spacing: 4) {
-                    Text("Available tokens: " + DiscordPresenceConfiguration.supportedTokens.joined(separator: "  "))
-                        .font(.caption.monospaced())
-                    Text("Blank fields automatically use the original title, artist, or album value.")
-                        .font(.caption)
                 }
-                .foregroundStyle(.secondary)
-
-                HStack {
-                    Spacer()
-                    Button("Revert Changes") {
-                        draft = model.discordPresenceConfiguration
+                if let session = model.manualDiscordPresenceSession {
+                    LabeledContent("Active mode") {
+                        Label("Manual until \(session.expiresAt.formatted(date: .omitted, time: .shortened))",
+                              systemImage: "slider.horizontal.3")
                     }
-                    .disabled(!hasUnsavedChanges)
-
-                    Button("Reset to Defaults") {
-                        draft = .standard
-                        model.resetDiscordPresenceConfiguration()
+                } else {
+                    LabeledContent("Active mode") {
+                        Label("Live playback", systemImage: "waveform")
                     }
-                    .disabled(!hasCustomization)
-
-                    Button("Apply") {
-                        model.applyDiscordPresenceConfiguration(draft)
-                    }
-                    .keyboardShortcut(.defaultAction)
-                    .disabled(!hasUnsavedChanges)
                 }
             }
 
-            Section("Preview") {
-                DiscordPresencePreview(
-                    configuration: draft,
-                    track: model.discordPreviewTrack
-                )
+            Picker("Presence editor", selection: $editorMode) {
+                ForEach(EditorMode.allCases) { mode in
+                    Text(mode.rawValue).tag(mode)
+                }
+            }
+            .pickerStyle(.segmented)
+
+            if editorMode == .live {
+                liveEditor
+            } else {
+                manualEditor
             }
         }
         .formStyle(.grouped)
         .onChange(of: model.discordPresenceConfiguration) { oldValue, newValue in
             if draft == oldValue { draft = newValue }
+        }
+        .alert("Clear all private songs?", isPresented: $confirmsClearPrivacy) {
+            Button("Cancel", role: .cancel) {}
+            Button("Clear", role: .destructive) {
+                model.clearPrivateDiscordTracks()
+            }
+        } message: {
+            Text("Songs in the privacy list will be allowed on Discord again.")
+        }
+    }
+
+    @ViewBuilder
+    private var liveEditor: some View {
+        Section("Live Preset") {
+            Picker("Preset", selection: $draft.preset) {
+                ForEach(DiscordPresencePreset.allCases) { preset in
+                    Text(preset.displayName).tag(preset)
+                }
+            }
+            .onChange(of: draft.preset) { oldValue, newValue in
+                guard oldValue != newValue, newValue != .custom else { return }
+                draft = newValue.applying(to: draft)
+            }
+            Text(draft.preset.helpText)
+                .font(.caption)
+                .foregroundStyle(.secondary)
+
+            MetadataSourcePicker(selection: $model.discordMetadataSource)
+            Text(model.discordMetadataSource.helpText)
+                .font(.caption)
+                .foregroundStyle(.secondary)
+
+            Picker("When playback pauses", selection: $draft.pausePolicy) {
+                ForEach(DiscordPausePolicy.allCases) { policy in
+                    Text(policy.displayName).tag(policy)
+                }
+            }
+        }
+
+        Section("Text") {
+            TextField("Top line", text: customText(\.detailsTemplate))
+                .accessibilityHint("Supports title, artist, and album tokens")
+            TextField("Second line", text: customText(\.stateTemplate))
+                .accessibilityHint("Supports title, artist, and album tokens")
+            TextField("Cover description", text: customText(\.imageTextTemplate))
+                .accessibilityHint("Supports title, artist, and album tokens")
+            Toggle("Show playback time", isOn: $draft.showsPlaybackTime)
+            Toggle("Include song links", isOn: $draft.showsSongLink)
+
+            Text(
+                "Available tokens: "
+                    + DiscordPresenceConfiguration.supportedTokens.joined(separator: "  ")
+            )
+            .font(.caption.monospaced())
+            .foregroundStyle(.secondary)
+        }
+
+        Section("Links and Buttons") {
+            Toggle("Link the top line to the song", isOn: $draft.linksDetailsToSong)
+                .disabled(!draft.showsSongLink)
+            Toggle("Link the second line to the song", isOn: $draft.linksStateToSong)
+                .disabled(!draft.showsSongLink)
+            Toggle("Link the cover to the song", isOn: $draft.linksCoverToSong)
+                .disabled(!draft.showsSongLink)
+            TextField("Primary button label", text: $draft.primaryButtonLabel)
+                .disabled(!draft.showsSongLink)
+            TextField("Secondary button label", text: $draft.secondaryButtonLabel)
+            TextField("Secondary button HTTPS URL", text: $draft.secondaryButtonURL)
+
+            if let liveValidationMessage {
+                Label(liveValidationMessage, systemImage: "exclamationmark.triangle")
+                    .font(.caption)
+                    .foregroundStyle(.secondary)
+            } else {
+                Text(
+                    "Discord supports at most two buttons. Buttons appear to other "
+                        + "people, so your own profile card may not show them."
+                )
+                .font(.caption)
+                .foregroundStyle(.secondary)
+            }
+        }
+
+        Section("Privacy") {
+            Toggle(
+                "Hide this song from Discord",
+                isOn: Binding(
+                    get: { model.isCurrentDiscordTrackPrivate },
+                    set: { model.setCurrentDiscordTrackPrivate($0) }
+                )
+            )
+            .disabled(model.discordPreviewTrack == nil)
+
+            HStack {
+                Text(
+                    model.discordPreviewTrack == nil
+                        ? "Start a song to add it to the private list."
+                        : "Only a one-way fingerprint is saved; the title and URL are not stored."
+                )
+                .font(.caption)
+                .foregroundStyle(.secondary)
+                Spacer()
+                Button("Clear \(model.privateDiscordTrackCount) Private Songs…") {
+                    confirmsClearPrivacy = true
+                }
+                .disabled(model.privateDiscordTrackCount == 0)
+            }
+        }
+
+        Section("Preview") {
+            DiscordPresencePreview(
+                activity: livePreviewActivity,
+                artwork: model.nowPlayingArtwork,
+                remoteCoverURL: nil,
+                modeLabel: "Live",
+                usesExample: model.discordPreviewTrack == nil
+            )
+        }
+
+        Section {
+            HStack {
+                Spacer()
+                Button("Revert Changes") {
+                    draft = model.discordPresenceConfiguration
+                }
+                .disabled(!hasUnsavedChanges)
+
+                Button("Reset to Defaults") {
+                    draft = .standard
+                    model.resetDiscordPresenceConfiguration()
+                }
+                .disabled(!hasCustomization)
+
+                Button("Apply") {
+                    model.applyDiscordPresenceConfiguration(draft)
+                }
+                .keyboardShortcut(.defaultAction)
+                .disabled(!hasUnsavedChanges || liveValidationMessage != nil)
+            }
+        }
+    }
+
+    @ViewBuilder
+    private var manualEditor: some View {
+        Section("Manual Presence") {
+            TextField("Song title", text: $manualDraft.title)
+            TextField("Artist", text: $manualDraft.artist)
+            TextField("Album", text: $manualDraft.album)
+            TextField("Cover image HTTPS URL", text: $manualDraft.coverURL)
+            TextField("Song HTTPS URL", text: $manualDraft.songURL)
+
+            Stepper(
+                "Song duration: \(manualDraft.durationMinutes) min",
+                value: $manualDraft.durationMinutes,
+                in: 1 ... 1_440
+            )
+            Toggle("Show playback time", isOn: $manualDraft.showsPlaybackTime)
+            Picker("Return to live after", selection: $manualDraft.lifetime) {
+                ForEach(ManualPresenceLifetime.allCases) { lifetime in
+                    Text(lifetime.displayName).tag(lifetime)
+                }
+            }
+        }
+
+        Section("Optional Second Button") {
+            TextField("Button label", text: $manualDraft.secondaryButtonLabel)
+            TextField("Button HTTPS URL", text: $manualDraft.secondaryButtonURL)
+
+            Text(
+                "Manual presence is clearly marked inside the app, expires automatically, "
+                    + "and is not restored after the app quits."
+            )
+            .font(.caption)
+            .foregroundStyle(.secondary)
+        }
+
+        Section("Preview") {
+            DiscordPresencePreview(
+                activity: manualPreviewActivity,
+                artwork: nil,
+                remoteCoverURL: DiscordURLValidator.httpsURL(manualDraft.coverURL),
+                modeLabel: "Manual",
+                usesExample: false
+            )
+        }
+
+        Section {
+            if let message = manualDraft.validationMessage ?? manualError {
+                Label(message, systemImage: "exclamationmark.triangle")
+                    .font(.caption)
+                    .foregroundStyle(.secondary)
+            }
+
+            HStack {
+                Button("Use Current Song") {
+                    manualDraft = Self.manualDraft(from: model.discordPreviewTrack)
+                    manualError = nil
+                }
+                .disabled(model.discordPreviewTrack == nil)
+
+                Spacer()
+
+                Button("Return to Live") {
+                    model.returnToLiveDiscordPresence()
+                    manualError = nil
+                }
+                .disabled(model.manualDiscordPresenceSession == nil)
+
+                Button("Publish Manual") {
+                    manualError = model.publishManualDiscordPresence(manualDraft)
+                }
+                .keyboardShortcut(.defaultAction)
+                .disabled(
+                    manualDraft.validationMessage != nil
+                        || !model.discordEnabled
+                        || !model.isDiscordConfigured
+                )
+            }
         }
     }
 
@@ -361,6 +845,249 @@ private struct DiscordSettingsView: View {
 
     private var hasCustomization: Bool {
         draft != .standard || model.discordPresenceConfiguration != .standard
+    }
+
+    private var liveValidationMessage: String? {
+        let primary = draft.primaryButtonLabel.trimmingCharacters(in: .whitespacesAndNewlines)
+        if draft.showsSongLink && primary.isEmpty {
+            return "Enter a primary button label or turn off song links."
+        }
+        if primary.count > 32 {
+            return "Button labels can contain up to 32 characters."
+        }
+
+        let secondaryLabel = draft.secondaryButtonLabel
+            .trimmingCharacters(in: .whitespacesAndNewlines)
+        let secondaryURL = draft.secondaryButtonURL
+            .trimmingCharacters(in: .whitespacesAndNewlines)
+        if secondaryLabel.isEmpty != secondaryURL.isEmpty {
+            return "Enter both a secondary button label and URL."
+        }
+        if secondaryLabel.count > 32 {
+            return "Button labels can contain up to 32 characters."
+        }
+        if !DiscordURLValidator.optionalURLIsValid(secondaryURL) {
+            return "The secondary button URL must be a valid HTTPS URL."
+        }
+        return nil
+    }
+
+    private var livePreviewActivity: PresenceActivity {
+        let track = model.discordPreviewTrack ?? Self.exampleTrack
+        let content = draft.content(for: track)
+        let links = draft.links(for: track)
+        let start = draft.showsPlaybackTime
+            ? Date().addingTimeInterval(-track.elapsed)
+            : nil
+        return PresenceActivity(
+            name: track.artist.isEmpty ? track.title : "\(track.title) - \(track.artist)",
+            details: content.details,
+            state: content.state,
+            start: start,
+            end: start.flatMap {
+                track.duration > 0 ? $0.addingTimeInterval(track.duration) : nil
+            },
+            largeImage: YouTubeMusicSource.discordAssetKey,
+            largeImageText: content.imageText,
+            smallImage: YouTubeMusicSource.discordAssetKey,
+            smallImageText: YouTubeMusicSource.displayName,
+            detailsURL: links.detailsURL,
+            stateURL: links.stateURL,
+            largeImageURL: links.coverURL,
+            smallImageURL: nil,
+            buttons: links.buttons
+        )
+    }
+
+    private var manualPreviewActivity: PresenceActivity {
+        manualDraft.activity(
+            startedAt: model.manualDiscordPresenceSession?.startedAt ?? Date()
+        ) ?? PresenceActivity(
+            name: "Manual Presence",
+            details: manualDraft.title.isEmpty ? "Song Title" : manualDraft.title,
+            state: manualDraft.artist.isEmpty ? "Artist" : manualDraft.artist,
+            start: nil,
+            end: nil,
+            largeImage: YouTubeMusicSource.discordAssetKey,
+            largeImageText: manualDraft.album,
+            smallImage: YouTubeMusicSource.discordAssetKey,
+            smallImageText: "Manual presence · YT Music Companion"
+        )
+    }
+
+    private func customText(
+        _ keyPath: WritableKeyPath<DiscordPresenceConfiguration, String>
+    ) -> Binding<String> {
+        Binding(
+            get: { draft[keyPath: keyPath] },
+            set: {
+                draft[keyPath: keyPath] = $0
+                draft.preset = .custom
+            }
+        )
+    }
+
+    private static let exampleTrack = NowPlaying(
+        title: "Song Title",
+        artist: "Artist",
+        album: "Album",
+        duration: 180,
+        elapsed: 30,
+        timestamp: 0,
+        isPlaying: true,
+        rate: 1,
+        sourceBundle: "",
+        sourcePID: 0,
+        trackURL: URL(string: "https://music.youtube.com/")
+    )
+
+    private static func manualDraft(from track: NowPlaying?) -> ManualDiscordPresence {
+        guard let track else { return .example }
+        return ManualDiscordPresence(
+            title: track.title,
+            artist: track.artist,
+            album: track.album,
+            coverURL: "",
+            songURL: track.trackURL?.absoluteString ?? "",
+            durationMinutes: max(1, Int(ceil(track.duration / 60))),
+            showsPlaybackTime: true,
+            lifetime: .thirtyMinutes,
+            secondaryButtonLabel: "",
+            secondaryButtonURL: ""
+        )
+    }
+}
+
+private struct DiagnosticsSettingsView: View {
+    @ObservedObject var model: PlayerModel
+    @State private var confirmsCacheClear = false
+
+    var body: some View {
+        let diagnostics = model.runtimeDiagnostics
+        Form {
+            Section("Playback Engine") {
+                LabeledContent("Polling") {
+                    Text(
+                        "\(diagnostics.pollMode.displayName) · "
+                            + "\(format(diagnostics.nextPollInterval)) seconds"
+                    )
+                    .monospacedDigit()
+                }
+                LabeledContent("Last poll") {
+                    if let date = diagnostics.lastPollDate {
+                        Text(date, style: .time)
+                    } else {
+                        Text("Not yet")
+                    }
+                }
+                LabeledContent("Last poll duration") {
+                    Text(
+                        diagnostics.lastPollDuration.map {
+                            "\(Int(($0 * 1_000).rounded())) ms"
+                        } ?? "—"
+                    )
+                    .monospacedDigit()
+                }
+                LabeledContent("Active work") {
+                    Text(
+                        diagnostics.activeOperations.isEmpty
+                            ? "None"
+                            : diagnostics.activeOperations.joined(separator: ", ")
+                    )
+                }
+            }
+
+            Section("Child Processes") {
+                LabeledContent("Currently running") {
+                    Text("\(diagnostics.subprocesses.activeCount)")
+                }
+                LabeledContent("Launched this session") {
+                    Text("\(diagnostics.subprocesses.totalLaunches)")
+                }
+                LabeledContent("Cancelled after track change") {
+                    Text("\(diagnostics.subprocesses.cancelledCount)")
+                }
+                LabeledContent("Timed out") {
+                    Text("\(diagnostics.subprocesses.timedOutCount)")
+                }
+            }
+
+            Section("Session Cache") {
+                LabeledContent("Metadata") {
+                    Text("\(diagnostics.metadataCacheEntries) / \(SessionCacheLimits.metadata)")
+                }
+                LabeledContent("Artwork") {
+                    Text("\(diagnostics.artworkCacheEntries) / \(SessionCacheLimits.artwork)")
+                }
+                LabeledContent("Lyrics") {
+                    Text("\(diagnostics.lyricsCacheEntries) / \(SessionCacheLimits.lyrics)")
+                }
+                LabeledContent("Lyric choices") {
+                    Text(
+                        "\(diagnostics.lyricCandidateCacheEntries) / "
+                            + "\(SessionCacheLimits.lyricCandidates)"
+                    )
+                }
+                LabeledContent("Saved lyrics on disk") {
+                    Text(
+                        "\(model.lyricsDiskCacheStatistics.fileCount) files · "
+                            + model.lyricsDiskCacheStatistics.formattedSize
+                    )
+                }
+                LabeledContent("Saved translations on disk") {
+                    Text(
+                        "\(model.translationDiskCacheStatistics.fileCount) files · "
+                            + model.translationDiskCacheStatistics.formattedSize
+                    )
+                }
+                HStack {
+                    Text("Saved lyrics and translations are reproducible and safe to clear.")
+                        .foregroundStyle(.secondary)
+                    Spacer()
+                    Button("Clear Caches…") {
+                        confirmsCacheClear = true
+                    }
+                    .disabled(
+                        model.lyricsDiskCacheStatistics.fileCount == 0
+                            && model.translationDiskCacheStatistics.fileCount == 0
+                    )
+                }
+            }
+
+            Section("Discord") {
+                Label(
+                    diagnostics.discordStatus.displayName,
+                    systemImage: diagnostics.discordStatus.systemImage
+                )
+            }
+
+            Section {
+                Text(
+                    "Diagnostics stay on this Mac. Track titles are not written "
+                        + "to the diagnostic counters shown here."
+                )
+                .font(.caption)
+                .foregroundStyle(.secondary)
+            }
+        }
+        .formStyle(.grouped)
+        .alert("Clear saved lyrics and translations?", isPresented: $confirmsCacheClear) {
+            Button("Cancel", role: .cancel) {}
+            Button("Clear", role: .destructive) {
+                model.clearSavedLyricsCache()
+            }
+        } message: {
+            Text(
+                "Lyrics will be downloaded again and translations will be regenerated "
+                    + "when those songs are played."
+            )
+        }
+    }
+
+    private func format(_ interval: TimeInterval) -> String {
+        interval.rounded() == interval
+            ? String(Int(interval))
+            : String(format: "%.1f", interval)
     }
 }
 
@@ -378,72 +1105,108 @@ private struct MetadataSourcePicker: View {
 }
 
 private struct DiscordPresencePreview: View {
-    let configuration: DiscordPresenceConfiguration
-    let track: NowPlaying?
-
-    private static let exampleTrack = NowPlaying(
-        title: "Song Title",
-        artist: "Artist",
-        album: "Album",
-        duration: 180,
-        elapsed: 30,
-        timestamp: 0,
-        isPlaying: true,
-        rate: 1,
-        sourceBundle: "",
-        sourcePID: 0
-    )
+    let activity: PresenceActivity
+    let artwork: NowPlayingArtwork?
+    let remoteCoverURL: URL?
+    let modeLabel: String
+    let usesExample: Bool
 
     var body: some View {
-        let previewTrack = track ?? Self.exampleTrack
-        let content = configuration.content(for: previewTrack)
-
-        HStack(spacing: 14) {
-            Image(systemName: "music.note")
-                .font(.system(size: 28, weight: .medium))
-                .foregroundStyle(.secondary)
-                .frame(width: 58, height: 58)
-                .background(.quaternary, in: RoundedRectangle(cornerRadius: 10))
-                .accessibilityHidden(true)
-
-            VStack(alignment: .leading, spacing: 3) {
-                Text(content.details)
-                    .font(.headline)
-                    .lineLimit(1)
-                Text(content.state)
+        VStack(alignment: .leading, spacing: 10) {
+            HStack {
+                Label(modeLabel, systemImage: modeLabel == "Manual" ? "slider.horizontal.3" : "waveform")
+                    .font(.caption.weight(.medium))
                     .foregroundStyle(.secondary)
-                    .lineLimit(1)
-                Text(content.imageText)
-                    .font(.caption)
-                    .foregroundStyle(.tertiary)
-                    .lineLimit(1)
-            }
-
-            Spacer(minLength: 12)
-
-            VStack(alignment: .trailing, spacing: 5) {
-                Label(
-                    configuration.showsPlaybackTime ? "Time shown" : "Time hidden",
-                    systemImage: configuration.showsPlaybackTime ? "clock" : "clock.badge.xmark"
-                )
-                Label(
-                    configuration.showsSongLink ? "Song link enabled" : "Song link hidden",
-                    systemImage: configuration.showsSongLink ? "link" : "eye.slash"
-                )
+                if usesExample {
+                    Text("Example")
+                        .font(.caption)
+                        .foregroundStyle(.tertiary)
+                }
+                Spacer()
+                if activity.start != nil {
+                    Label("Time", systemImage: "clock")
+                }
+                if activity.detailsURL != nil || activity.stateURL != nil
+                    || activity.largeImageURL != nil
+                {
+                    Label("Linked fields", systemImage: "link")
+                }
             }
             .font(.caption)
             .foregroundStyle(.secondary)
+
+            HStack(spacing: 14) {
+                cover
+                    .frame(width: 64, height: 64)
+                    .clipShape(RoundedRectangle(cornerRadius: 10))
+                    .accessibilityHidden(true)
+
+                VStack(alignment: .leading, spacing: 3) {
+                    Text(activity.details)
+                        .font(.headline)
+                        .lineLimit(1)
+                    Text(activity.state)
+                        .foregroundStyle(.secondary)
+                        .lineLimit(1)
+                    if let imageText = activity.largeImageText, !imageText.isEmpty {
+                        Text(imageText)
+                            .font(.caption)
+                            .foregroundStyle(.tertiary)
+                            .lineLimit(1)
+                    }
+                }
+                Spacer(minLength: 12)
+            }
+
+            if !activity.buttons.isEmpty {
+                HStack(spacing: 8) {
+                    ForEach(Array(activity.buttons.enumerated()), id: \.offset) { _, button in
+                        Label(button.label, systemImage: "arrow.up.right")
+                            .font(.caption.weight(.medium))
+                            .lineLimit(1)
+                            .frame(maxWidth: .infinity)
+                            .padding(.vertical, 6)
+                            .background(.quaternary, in: RoundedRectangle(cornerRadius: 6))
+                    }
+                }
+            }
         }
-        .padding(.vertical, 8)
+        .padding(12)
+        .background(.quaternary.opacity(0.5), in: RoundedRectangle(cornerRadius: 12))
         .accessibilityElement(children: .combine)
-        .accessibilityLabel(accessibilityDescription(content: content))
+        .accessibilityLabel(accessibilityDescription)
     }
 
-    private func accessibilityDescription(content: DiscordPresenceContent) -> String {
-        let kind = track == nil ? "Example Discord preview" : "Current Discord preview"
-        let time = configuration.showsPlaybackTime ? "playback time shown" : "playback time hidden"
-        let link = configuration.showsSongLink ? "song link enabled" : "song link hidden"
-        return "\(kind), \(content.details), \(content.state), \(content.imageText), \(time), \(link)"
+    @ViewBuilder
+    private var cover: some View {
+        if let artwork, let image = NSImage(data: artwork.data) {
+            Image(nsImage: image)
+                .resizable()
+                .scaledToFill()
+        } else if let remoteCoverURL {
+            AsyncImage(url: remoteCoverURL) { phase in
+                if let image = phase.image {
+                    image.resizable().scaledToFill()
+                } else {
+                    coverPlaceholder
+                }
+            }
+        } else {
+            coverPlaceholder
+        }
+    }
+
+    private var coverPlaceholder: some View {
+        Image(systemName: "music.note")
+            .font(.system(size: 28, weight: .medium))
+            .foregroundStyle(.secondary)
+            .frame(maxWidth: .infinity, maxHeight: .infinity)
+            .background(.quaternary)
+    }
+
+    private var accessibilityDescription: String {
+        let time = activity.start == nil ? "playback time hidden" : "playback time shown"
+        return "\(modeLabel) Discord preview, \(activity.details), \(activity.state), \(time), \(activity.buttons.count) buttons"
     }
 }
 

@@ -1,6 +1,15 @@
 import Foundation
 import CryptoKit
 
+struct LyricsCacheStatistics: Equatable {
+    let fileCount: Int
+    let totalBytes: Int
+
+    var formattedSize: String {
+        ByteCountFormatter.string(fromByteCount: Int64(totalBytes), countStyle: .file)
+    }
+}
+
 /// On-disk persistence for resolved lyrics, layered behind `PlayerModel`'s
 /// in-memory `lyricsCache`. We mostly replay our own library, and LRCLIB is
 /// often slow (and 504s under concurrent load), so a track resolved once should
@@ -17,6 +26,9 @@ import CryptoKit
 /// Caches (not Application Support) is deliberate: this is re-derivable data, so
 /// it's fine for the OS to purge it under disk pressure — we just refetch.
 enum LyricsCache {
+    private static let maximumFileCount = 1_000
+    private static let maximumTotalBytes = 50 * 1_024 * 1_024
+
     /// Storage directory override for tests. nil → the default Caches location.
     static var overrideDirectory: URL?
 
@@ -66,5 +78,60 @@ enum LyricsCache {
         guard let url = fileURL(for: trackKey),
               let data = try? JSONEncoder().encode(lines) else { return }
         try? data.write(to: url, options: .atomic)
+        pruneIfNeeded()
+    }
+
+    static func statistics() -> LyricsCacheStatistics {
+        let files = cachedFiles()
+        return LyricsCacheStatistics(
+            fileCount: files.count,
+            totalBytes: files.reduce(0) { $0 + $1.size }
+        )
+    }
+
+    static func clear() {
+        cachedFiles().forEach { try? FileManager.default.removeItem(at: $0.url) }
+    }
+
+    private struct CachedFile {
+        let url: URL
+        let size: Int
+        let modifiedAt: Date
+    }
+
+    private static func cachedFiles() -> [CachedFile] {
+        guard let directory = directory() else { return [] }
+        let keys: Set<URLResourceKey> = [
+            .contentModificationDateKey,
+            .fileSizeKey,
+            .isRegularFileKey,
+        ]
+        guard let urls = try? FileManager.default.contentsOfDirectory(
+            at: directory,
+            includingPropertiesForKeys: Array(keys),
+            options: [.skipsHiddenFiles]
+        ) else { return [] }
+
+        return urls.compactMap { url in
+            guard url.pathExtension == "json",
+                  let values = try? url.resourceValues(forKeys: keys),
+                  values.isRegularFile == true else { return nil }
+            return CachedFile(
+                url: url,
+                size: values.fileSize ?? 0,
+                modifiedAt: values.contentModificationDate ?? .distantPast
+            )
+        }
+    }
+
+    private static func pruneIfNeeded() {
+        var files = cachedFiles().sorted { $0.modifiedAt < $1.modifiedAt }
+        var totalBytes = files.reduce(0) { $0 + $1.size }
+
+        while files.count > maximumFileCount || totalBytes > maximumTotalBytes {
+            let oldest = files.removeFirst()
+            try? FileManager.default.removeItem(at: oldest.url)
+            totalBytes = max(0, totalBytes - oldest.size)
+        }
     }
 }

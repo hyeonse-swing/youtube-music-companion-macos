@@ -1,4 +1,5 @@
 import Cocoa
+import Combine
 import SwiftUI
 
 /// Hosting view that forwards vertical scroll-wheel input — used to calibrate
@@ -35,17 +36,9 @@ final class AppDelegate: NSObject, NSApplicationDelegate {
     private var activity: NSObjectProtocol?
     private var menuBar: MenuBar?
     private let overlayPositionStore = OverlayPositionStore()
+    private var cancellables = Set<AnyCancellable>()
 
     func applicationDidFinishLaunching(_ notification: Notification) {
-        // Prevent App Nap from throttling our polling + network while unfocused,
-        // but still allow the Mac to idle-sleep normally — a passive overlay has
-        // no business keeping the machine awake. (.userInitiated would imply
-        // .idleSystemSleepDisabled; the …AllowingIdleSystemSleep variant doesn't.)
-        activity = ProcessInfo.processInfo.beginActivity(
-            options: .userInitiatedAllowingIdleSystemSleep,
-            reason: "Live lyrics overlay"
-        )
-
         let width = OverlayStyle.windowWidth
         let height = OverlayStyle.windowHeight
 
@@ -82,40 +75,28 @@ final class AppDelegate: NSObject, NSApplicationDelegate {
         // Stays hidden until there's something to show; the timer below brings it
         // on/off screen as music + lyrics come and go.
 
-        // Cheap, permission-free hover detection: poll the cursor position and
-        // check whether it's inside the overlay's frame.
-        hoverTimer = Timer.scheduledTimer(withTimeInterval: 0.15, repeats: true) { [weak self] _ in
-            MainActor.assumeIsolated {       // Timer fires on the main run loop
-                guard let self else { return }
-
-                // Show the window only when there's something to display AND the
-                // user hasn't disabled the overlay from the menubar; otherwise take
-                // it off screen entirely so it can't catch hover or scroll.
-                let show = self.model.hasContent && self.model.overlayEnabled
-                if self.window.isVisible != show {
-                    if show {
-                        self.window.orderFrontRegardless()
-                    } else {
-                        self.window.orderOut(nil)
-                        self.model.isHovering = false
-                        self.window.ignoresMouseEvents = true
-                    }
-                }
-                guard show else { return }
-
-                // Only the current line's visible text is interactive: a centred band
-                // sized to the rendered glyphs (see currentLineRect). The cursor there
-                // captures scroll (to calibrate) and brightens the overlay; everywhere
-                // else — including the empty margins beside the text — the window stays
-                // click-through, so it never blocks the large area it covers.
-                let onText = self.currentLineRect(in: self.window.frame)?
-                    .contains(NSEvent.mouseLocation) ?? false
-                if onText != self.model.isHovering {
-                    self.model.isHovering = onText
-                    self.window.ignoresMouseEvents = !onText
-                }
-            }
+        Publishers.CombineLatest4(
+            model.$isPlaying,
+            model.$lines,
+            model.$isFetching,
+            model.$overlayEnabled
+        )
+        // @Published emits from willSet. Defer one run-loop turn so
+        // `model.hasContent` observes the committed values, especially when the
+        // overlay toggle is switched off or a lyric lookup finishes empty.
+        .receive(on: RunLoop.main)
+        .sink { [weak self] _, _, _, _ in
+            self?.updateOverlayVisibility()
         }
+        .store(in: &cancellables)
+
+        model.$isPlaying
+            .removeDuplicates()
+            .receive(on: RunLoop.main)
+            .sink { [weak self] isPlaying in
+                self?.updateActivityState(isPlaying: isPlaying)
+            }
+            .store(in: &cancellables)
 
         // Retain the menubar status item — without a strong reference it vanishes.
         menuBar = MenuBar(model: model) { [weak self] in
@@ -146,12 +127,76 @@ final class AppDelegate: NSObject, NSApplicationDelegate {
 
     func applicationWillTerminate(_ notification: Notification) {
         model.stop()
+        stopActivity()
+        hoverTimer?.invalidate()
+        hoverTimer = nil
     }
 
     private func resetOverlayPosition() {
         overlayPositionStore.reset()
         let size = NSSize(width: OverlayStyle.windowWidth, height: OverlayStyle.windowHeight)
         window.setFrame(OverlayPositionStore.defaultFrame(size: size), display: true, animate: true)
+    }
+
+    private func updateOverlayVisibility() {
+        let show = model.hasContent && model.overlayEnabled
+        guard window.isVisible != show else {
+            if show { startHoverTimer() }
+            return
+        }
+
+        if show {
+            window.orderFrontRegardless()
+            startHoverTimer()
+        } else {
+            window.orderOut(nil)
+            model.isHovering = false
+            window.ignoresMouseEvents = true
+            hoverTimer?.invalidate()
+            hoverTimer = nil
+        }
+    }
+
+    private func startHoverTimer() {
+        guard hoverTimer == nil else { return }
+        updateHoverState()
+        hoverTimer = Timer.scheduledTimer(
+            withTimeInterval: 0.15,
+            repeats: true
+        ) { [weak self] _ in
+            MainActor.assumeIsolated { self?.updateHoverState() }
+        }
+    }
+
+    private func updateHoverState() {
+        guard window.isVisible else { return }
+
+        // Only the current line's rendered band captures input. Empty margins stay
+        // click-through so the large transparent window never blocks other apps.
+        let onText = currentLineRect(in: window.frame)?
+            .contains(NSEvent.mouseLocation) ?? false
+        if onText != model.isHovering {
+            model.isHovering = onText
+            window.ignoresMouseEvents = !onText
+        }
+    }
+
+    private func updateActivityState(isPlaying: Bool) {
+        if isPlaying {
+            guard activity == nil else { return }
+            activity = ProcessInfo.processInfo.beginActivity(
+                options: .userInitiatedAllowingIdleSystemSleep,
+                reason: "Live lyrics playback"
+            )
+        } else {
+            stopActivity()
+        }
+    }
+
+    private func stopActivity() {
+        guard let activity else { return }
+        ProcessInfo.processInfo.endActivity(activity)
+        self.activity = nil
     }
 
     /// Screen-space rect of the current lyric line's visible text: a centred band
@@ -167,12 +212,32 @@ final class AppDelegate: NSObject, NSApplicationDelegate {
         let idx = max(0, min(model.currentIndex, lines.count - 1))
         let text = lines[idx].text.isEmpty ? "♪" : lines[idx].text
         let fontSize = CGFloat(model.lyricsFontSize)
-        let rowHeight = OverlayStyle.rowHeight(fontSize: fontSize)
+        let rowHeight = OverlayStyle.rowHeight(
+            fontSize: fontSize,
+            layerCount: model.visibleLyricLayerCount
+        )
 
         let maxContentWidth = frame.width - 2 * OverlayStyle.horizontalPadding
-        let measured = (text as NSString).size(
-            withAttributes: [.font: OverlayStyle.currentLineFont(size: fontSize)]
-        ).width
+        var measuredWidths = [
+            (text as NSString).size(
+                withAttributes: [.font: OverlayStyle.currentLineFont(size: fontSize)]
+            ).width,
+        ]
+        if let romanized = model.romanizedText(at: idx) {
+            measuredWidths.append(
+                (romanized as NSString).size(
+                    withAttributes: [.font: OverlayStyle.romanizedLineFont(size: fontSize)]
+                ).width
+            )
+        }
+        if let translated = model.translatedText(at: idx) {
+            measuredWidths.append(
+                (translated as NSString).size(
+                    withAttributes: [.font: OverlayStyle.translatedLineFont(size: fontSize)]
+                ).width
+            )
+        }
+        let measured = measuredWidths.max() ?? 0
         // minimumScaleFactor shrinks an over-long line to fit the text area, so the
         // rendered width never exceeds maxContentWidth.
         let width = min(measured, maxContentWidth) + 2 * OverlayStyle.hitMargin

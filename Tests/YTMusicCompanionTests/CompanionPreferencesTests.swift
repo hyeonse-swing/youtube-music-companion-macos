@@ -23,25 +23,85 @@ final class CompanionPreferencesTests: XCTestCase {
         let preferences = CompanionPreferences(defaults: defaults)
 
         XCTAssertEqual(preferences.lyricsFontSize, 30)
+        XCTAssertFalse(preferences.showsRomanizedLyrics)
+        XCTAssertFalse(preferences.showsTranslatedLyrics)
+        XCTAssertEqual(preferences.translationTargetLanguage, .system)
+        XCTAssertEqual(preferences.translationTone, .naturalLyrics)
         XCTAssertEqual(preferences.displayMetadataSource, .youtubeMusic)
         XCTAssertEqual(preferences.discordMetadataSource, .youtubeMusic)
         XCTAssertEqual(preferences.discordPresenceConfiguration, .standard)
+        XCTAssertEqual(preferences.overlayPreset, .balanced)
+        XCTAssertFalse(preferences.karaokeModeEnabled)
+    }
+
+    func testOverlayAppearanceChoicesPersist() {
+        var preferences = CompanionPreferences(defaults: defaults)
+        preferences.overlayPreset = .stage
+        preferences.karaokeModeEnabled = true
+
+        preferences = CompanionPreferences(defaults: defaults)
+
+        XCTAssertEqual(preferences.overlayPreset, .stage)
+        XCTAssertTrue(preferences.karaokeModeEnabled)
+    }
+
+    func testLyricLayerChoicesPersist() {
+        var preferences = CompanionPreferences(defaults: defaults)
+        preferences.showsRomanizedLyrics = true
+        preferences.showsTranslatedLyrics = true
+        preferences.translationTargetLanguage = .korean
+        preferences.translationTone = .system
+
+        preferences = CompanionPreferences(defaults: defaults)
+
+        XCTAssertTrue(preferences.showsRomanizedLyrics)
+        XCTAssertTrue(preferences.showsTranslatedLyrics)
+        XCTAssertEqual(preferences.translationTargetLanguage, .korean)
+        XCTAssertEqual(preferences.translationTone, .system)
     }
 
     func testDiscordPresenceCustomizationPersists() {
-        let customized = DiscordPresenceConfiguration(
+        var customized = DiscordPresenceConfiguration(
             detailsTemplate: "Listening to {title}",
             stateTemplate: "by {artist}",
             imageTextTemplate: "from {album}",
             showsPlaybackTime: false,
             showsSongLink: false
         )
+        customized.preset = .custom
+        customized.pausePolicy = .keepForFifteenMinutes
+        customized.linksDetailsToSong = true
+        customized.linksStateToSong = true
+        customized.linksCoverToSong = false
+        customized.primaryButtonLabel = "Listen"
+        customized.secondaryButtonLabel = "Artist"
+        customized.secondaryButtonURL = "https://example.com/artist"
         var preferences = CompanionPreferences(defaults: defaults)
         preferences.discordPresenceConfiguration = customized
 
         preferences = CompanionPreferences(defaults: defaults)
 
         XCTAssertEqual(preferences.discordPresenceConfiguration, customized)
+    }
+
+    func testDiscordPrivateTrackIdentifiersAreHashedAndPersisted() {
+        var preferences = CompanionPreferences(defaults: defaults)
+        let identifier = "https://music.youtube.com/watch?v=private-song"
+
+        preferences.setDiscordTrackPrivate(true, identifier: identifier)
+        preferences = CompanionPreferences(defaults: defaults)
+
+        XCTAssertTrue(preferences.isDiscordTrackPrivate(identifier: identifier))
+        XCTAssertEqual(preferences.privateDiscordTrackCount, 1)
+        let stored = defaults.stringArray(
+            forKey: "discordPrivateTrackFingerprints"
+        )
+        XCTAssertEqual(stored?.count, 1)
+        XCTAssertFalse(stored?.contains(identifier) == true)
+
+        preferences.setDiscordTrackPrivate(false, identifier: identifier)
+        XCTAssertFalse(preferences.isDiscordTrackPrivate(identifier: identifier))
+        XCTAssertEqual(preferences.privateDiscordTrackCount, 0)
     }
 
     func testResetDiscordPresenceCustomizationReturnsToOriginalDefaults() {
@@ -113,7 +173,7 @@ final class CompanionPreferencesTests: XCTestCase {
         )
     }
 
-    func testResetCurrentTimingStoresAnExplicitZeroWithoutChangingOtherTracks() {
+    func testResetCurrentTimingRemovesTheSongEntryWithoutChangingOtherTracks() {
         var preferences = CompanionPreferences(defaults: defaults)
         preferences.saveTimingOffset(1.25, for: "artist|song|album")
         preferences.saveTimingOffset(-0.75, for: "other|song|album")
@@ -122,6 +182,9 @@ final class CompanionPreferencesTests: XCTestCase {
 
         XCTAssertEqual(preferences.timingOffset(for: "artist|song|album"), 0)
         XCTAssertEqual(preferences.timingOffset(for: "other|song|album"), -0.75)
+        let stored = defaults.dictionary(forKey: "syncTrackOffsets")
+        XCTAssertNil(stored?["artist|song|album"])
+        XCTAssertNotNil(stored?["other|song|album"])
     }
 
     func testUnknownTracksStartAtZeroAndRemoveTheLegacyLearnedBaseline() {

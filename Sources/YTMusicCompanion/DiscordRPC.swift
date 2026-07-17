@@ -17,15 +17,32 @@ struct PresenceActivity: Equatable {
     var largeImageText: String?
     var smallImage: String?
     var smallImageText: String?
+    var detailsURL: URL? = nil
+    var stateURL: URL? = nil
     var largeImageURL: URL? = nil
+    var smallImageURL: URL? = nil
     var buttons: [PresenceButton] = []
 }
 
 protocol PresencePublishing: AnyObject {
     var isConfigured: Bool { get }
+    var connectionStatus: DiscordConnectionStatus { get }
+    func setConnectionStatusHandler(
+        _ handler: (@Sendable (DiscordConnectionStatus) -> Void)?
+    )
     func setActivity(_ activity: PresenceActivity, completion: ((Bool) -> Void)?)
     func clear()
     func disconnect()
+}
+
+extension PresencePublishing {
+    var connectionStatus: DiscordConnectionStatus {
+        isConfigured ? .disconnected : .notConfigured
+    }
+
+    func setConnectionStatusHandler(
+        _ handler: (@Sendable (DiscordConnectionStatus) -> Void)?
+    ) {}
 }
 
 /// A dependency-free Discord Rich Presence client over Discord's local IPC.
@@ -59,13 +76,30 @@ final class DiscordRPC: PresencePublishing {
 
     // All socket access is confined to this serial queue. fd is only touched here.
     private let queue = DispatchQueue(label: "DiscordRPC.ipc")
+    private let statusLock = NSLock()
     private var fd: Int32 = -1
     private var isConnected = false
+    private var storedConnectionStatus: DiscordConnectionStatus
+    private var connectionStatusHandler: (@Sendable (DiscordConnectionStatus) -> Void)?
 
     var isConfigured: Bool { clientID != nil }
+    var connectionStatus: DiscordConnectionStatus {
+        statusLock.withLock { storedConnectionStatus }
+    }
 
     init(clientID: String?) {
         self.clientID = clientID
+        storedConnectionStatus = clientID == nil ? .notConfigured : .disconnected
+    }
+
+    func setConnectionStatusHandler(
+        _ handler: (@Sendable (DiscordConnectionStatus) -> Void)?
+    ) {
+        let current = statusLock.withLock { () -> DiscordConnectionStatus in
+            connectionStatusHandler = handler
+            return storedConnectionStatus
+        }
+        handler?(current)
     }
 
     // MARK: - Public API
@@ -75,8 +109,14 @@ final class DiscordRPC: PresencePublishing {
     /// the optional completion reports the outcome (used by the `--discord` probe).
     func connect(completion: ((_ socketFound: Bool, _ ready: Bool) -> Void)? = nil) {
         queue.async {
-            if self.isConnected { completion?(true, true); return }
+            if self.isConnected {
+                self.updateConnectionStatusLocked(.connected)
+                completion?(true, true)
+                return
+            }
+            self.updateConnectionStatusLocked(.connecting)
             let (found, ready) = self.connectLocked()
+            self.updateConnectionStatusLocked(ready ? .connected : (found ? .retrying : .disconnected))
             completion?(found, ready)
         }
     }
@@ -85,9 +125,19 @@ final class DiscordRPC: PresencePublishing {
     /// error) when Discord isn't reachable.
     func setActivity(_ activity: PresenceActivity, completion: ((Bool) -> Void)? = nil) {
         queue.async {
-            if !self.isConnected { _ = self.connectLocked() }
-            guard self.isConnected else { completion?(false); return }
+            if !self.isConnected {
+                self.updateConnectionStatusLocked(.connecting)
+                let (found, ready) = self.connectLocked()
+                guard ready else {
+                    self.updateConnectionStatusLocked(found ? .retrying : .disconnected)
+                    completion?(false)
+                    return
+                }
+                self.updateConnectionStatusLocked(.connected)
+            }
+            self.updateConnectionStatusLocked(.publishing)
             let ok = self.sendActivityLocked(activity)
+            self.updateConnectionStatusLocked(ok ? .published : .retrying)
             completion?(ok)
         }
     }
@@ -96,13 +146,19 @@ final class DiscordRPC: PresencePublishing {
     func clear() {
         queue.async {
             guard self.isConnected else { return }
-            _ = self.sendActivityLocked(nil)
+            let cleared = self.sendActivityLocked(nil)
+            self.updateConnectionStatusLocked(cleared ? .connected : .retrying)
         }
     }
 
     /// Close the socket and mark disconnected.
     func disconnect() {
-        queue.async { self.disconnectLocked() }
+        queue.async {
+            self.disconnectLocked()
+            self.updateConnectionStatusLocked(
+                self.clientID == nil ? .notConfigured : .disconnected
+            )
+        }
     }
 
     // MARK: - Codable activity model (snake_case wire keys)
@@ -112,12 +168,26 @@ final class DiscordRPC: PresencePublishing {
         let name: String
         let details: String
         let state: String
+        let detailsURL: String?
+        let stateURL: String?
         let timestamps: Timestamps?
         // Built whenever ANY asset field is set (so a track with no cover
         // still ships its source badge); omitted entirely only when all are nil. Each
         // wire key is itself optional and drops out of the JSON when nil.
         let assets: Assets?
         let buttons: [Button]?
+
+        enum CodingKeys: String, CodingKey {
+            case type
+            case name
+            case details
+            case state
+            case detailsURL = "details_url"
+            case stateURL = "state_url"
+            case timestamps
+            case assets
+            case buttons
+        }
 
         struct Timestamps: Encodable {
             // Unix epoch SECONDS. Omitted keys (nil) drop out of the JSON.
@@ -134,12 +204,14 @@ final class DiscordRPC: PresencePublishing {
             let smallImage: String?
             let smallText: String?
             let largeURL: String?
+            let smallURL: String?
             enum CodingKeys: String, CodingKey {
                 case largeImage = "large_image"
                 case largeText = "large_text"
                 case smallImage = "small_image"
                 case smallText = "small_text"
                 case largeURL = "large_url"
+                case smallURL = "small_url"
             }
         }
 
@@ -179,12 +251,22 @@ final class DiscordRPC: PresencePublishing {
     /// Returns (socketFound, ready). Leaves `isConnected`/`fd` set on success.
     private func connectLocked() -> (Bool, Bool) {
         guard let clientID else { return (false, false) }
-        guard let path = Self.socketPaths().first(where: { FileManager.default.fileExists(atPath: $0) }) else {
-            return (false, false)   // Discord not running
+        var socketFound = false
+        for path in Self.socketPaths()
+        where FileManager.default.fileExists(atPath: path) {
+            socketFound = true
+            if connectLocked(path: path, clientID: clientID) {
+                return (true, true)
+            }
         }
+        return (socketFound, false)
+    }
 
+    /// Tries one candidate. A stale `discord-ipc-0` must not prevent a healthy
+    /// `discord-ipc-1` from being discovered.
+    private func connectLocked(path: String, clientID: String) -> Bool {
         let sock = socket(AF_UNIX, SOCK_STREAM, 0)
-        guard sock >= 0 else { return (true, false) }
+        guard sock >= 0 else { return false }
 
         var addr = sockaddr_un()
         addr.sun_family = sa_family_t(AF_UNIX)
@@ -193,7 +275,7 @@ final class DiscordRPC: PresencePublishing {
         let pathBytes = Array(path.utf8)
         guard pathBytes.count < MemoryLayout.size(ofValue: addr.sun_path) else {
             close(sock)
-            return (true, false)
+            return false
         }
         withUnsafeMutablePointer(to: &addr.sun_path) { ptr in
             // Capacity is pathBytes.count + 1 so the trailing NUL write at index
@@ -213,8 +295,19 @@ final class DiscordRPC: PresencePublishing {
         }
         guard connectResult == 0 else {
             close(sock)
-            return (true, false)
+            return false
         }
+
+        // macOS can otherwise deliver SIGPIPE when Discord closes the peer between
+        // our liveness check and write(), terminating the whole companion process.
+        var noSignal: Int32 = 1
+        setsockopt(
+            sock,
+            SOL_SOCKET,
+            SO_NOSIGPIPE,
+            &noSignal,
+            socklen_t(MemoryLayout<Int32>.size)
+        )
 
         fd = sock
         isConnected = true
@@ -227,28 +320,29 @@ final class DiscordRPC: PresencePublishing {
         // (healthy) timeout rather than EOF.
         var tv = timeval(tv_sec: 2, tv_usec: 0)
         setsockopt(sock, SOL_SOCKET, SO_RCVTIMEO, &tv, socklen_t(MemoryLayout<timeval>.size))
+        setsockopt(sock, SOL_SOCKET, SO_SNDTIMEO, &tv, socklen_t(MemoryLayout<timeval>.size))
 
         // Handshake: opcode 0 with {"v":1,"client_id":...}. Discord answers with a
         // FRAME whose evt == "READY".
         guard let body = try? JSONEncoder().encode(Handshake(v: 1, clientID: clientID)),
               writeFrame(.handshake, body) else {
             disconnectLocked()
-            return (true, false)
+            return false
         }
 
         // Await READY. A timeout or a closed/error socket here is a handshake failure
         // (we have nothing usable), so disconnect and report not-ready.
         guard case .frame(_, let replyBody) = readFrame() else {
             disconnectLocked()
-            return (true, false)
+            return false
         }
         let parsed = (try? JSONSerialization.jsonObject(with: replyBody)) as? [String: Any]
         let ready = (parsed?["evt"] as? String) == "READY"
         if !ready {
             disconnectLocked()
-            return (true, false)
+            return false
         }
-        return (true, true)
+        return true
     }
 
     private func disconnectLocked() {
@@ -305,13 +399,13 @@ final class DiscordRPC: PresencePublishing {
             writeFrame(.frame, body)
         else {
             disconnectLocked()
+            updateConnectionStatusLocked(.retrying)
             return false
         }
         // Drain Discord's reply (a FRAME acknowledging the command, or a PING). We
         // service one frame so PINGs get a PONG; not strictly required per send, but
         // keeps the connection healthy on a quiet socket.
-        servicePendingFrame()
-        return true
+        return servicePendingFrame()
     }
 
     private static func activityPayload(from activity: PresenceActivity) -> ActivityPayload {
@@ -325,13 +419,15 @@ final class DiscordRPC: PresencePublishing {
         let hasAnyAsset = activity.largeImage != nil || activity.largeImageText != nil
             || activity.smallImage != nil || activity.smallImageText != nil
             || activity.largeImageURL != nil
+            || activity.smallImageURL != nil
         let assets = hasAnyAsset
             ? ActivityPayload.Assets(
                 largeImage: activity.largeImage,
                 largeText: activity.largeImageText.map(Self.clamp),
                 smallImage: activity.smallImage,
                 smallText: activity.smallImageText.map(Self.clamp),
-                largeURL: activity.largeImageURL?.absoluteString
+                largeURL: validatedHTTPSURLString(activity.largeImageURL),
+                smallURL: validatedHTTPSURLString(activity.smallImageURL)
             )
             : nil
 
@@ -340,22 +436,35 @@ final class DiscordRPC: PresencePublishing {
             name: Self.clamp(activity.name),
             details: Self.clamp(activity.details),
             state: Self.clamp(activity.state),
+            detailsURL: validatedHTTPSURLString(activity.detailsURL),
+            stateURL: validatedHTTPSURLString(activity.stateURL),
             timestamps: timestamps,
             assets: assets,
             buttons: Self.buttonPayloads(from: activity.buttons)
         )
     }
 
+    private static func validatedHTTPSURLString(_ url: URL?) -> String? {
+        guard let url,
+              url.scheme?.lowercased() == "https",
+              url.host?.isEmpty == false,
+              url.absoluteString.utf8.count <= 512
+        else {
+            return nil
+        }
+        return url.absoluteString
+    }
+
     private static func buttonPayloads(
         from buttons: [PresenceButton]
     ) -> [ActivityPayload.Button]? {
         let payloads = buttons.prefix(2).compactMap { button -> ActivityPayload.Button? in
-            guard button.url.scheme?.lowercased() == "https" else { return nil }
+            guard let url = validatedHTTPSURLString(button.url) else { return nil }
             let label = button.label.trimmingCharacters(in: .whitespacesAndNewlines)
             guard !label.isEmpty else { return nil }
             return ActivityPayload.Button(
                 label: String(label.prefix(32)),
-                url: button.url.absoluteString
+                url: url
             )
         }
         return payloads.isEmpty ? nil : payloads
@@ -365,27 +474,36 @@ final class DiscordRPC: PresencePublishing {
     /// is normal — Discord often accepts a SET_ACTIVITY without replying — so a quiet
     /// but live socket must stay connected (just return). Only a real close/error
     /// disconnects; a real frame is handled.
-    private func servicePendingFrame() {
+    private func servicePendingFrame() -> Bool {
         switch readFrame() {
         case .timedOut:
-            return                  // quiet but healthy socket — leave it connected
+            return true             // quiet but healthy socket — leave it connected
         case .closed:
             disconnectLocked()
+            updateConnectionStatusLocked(.retrying)
+            return false
         case .frame(let op, let body):
-            handle(op: op, body: body)
+            return handle(op: op, body: body)
         }
     }
 
-    private func handle(op: Opcode, body: Data) {
+    private func handle(op: Opcode, body: Data) -> Bool {
         switch op {
         case .ping:
             // Echo the same body back as a PONG to stay connected.
-            _ = writeFrame(.pong, body)
+            guard writeFrame(.pong, body) else {
+                disconnectLocked()
+                updateConnectionStatusLocked(.retrying)
+                return false
+            }
         case .close:
             disconnectLocked()
+            updateConnectionStatusLocked(.retrying)
+            return false
         default:
             break   // FRAME ack / PONG — nothing to do.
         }
+        return true
     }
 
     // MARK: - Framing (on `queue`)
@@ -435,7 +553,9 @@ final class DiscordRPC: PresencePublishing {
             guard length <= 1_000_000 else { return .closed }
             if length == 0 { return .frame(op, Data()) }
             switch readExactly(Int(length)) {
-            case .timedOut: return .timedOut
+            // The header has already been consumed. Even a zero-byte body timeout
+            // leaves the stream midway through a frame, so reconnect.
+            case .timedOut: return .closed
             case .closed: return .closed
             case .ok(let body): return .frame(op, body)
             }
@@ -451,6 +571,7 @@ final class DiscordRPC: PresencePublishing {
             let total = raw.count
             while offset < total {
                 let n = write(fd, base + offset, total - offset)
+                if n < 0 && errno == EINTR { continue }
                 if n <= 0 { return false }   // error or closed
                 offset += n
             }
@@ -475,11 +596,25 @@ final class DiscordRPC: PresencePublishing {
                 offset += n
                 continue
             }
+            if n < 0 && errno == EINTR {
+                continue
+            }
             if n < 0 && (errno == EAGAIN || errno == EWOULDBLOCK) {
-                return .timedOut   // SO_RCVTIMEO fired — quiet socket, not dead
+                // A timeout before reading anything is a quiet socket. Timing out
+                // midway through a frame loses byte alignment, so force reconnect.
+                return offset == 0 ? .timedOut : .closed
             }
             return .closed         // 0 = EOF (peer closed), <0 = error
         }
         return .ok(Data(buffer))
+    }
+
+    private func updateConnectionStatusLocked(_ status: DiscordConnectionStatus) {
+        let handler: (@Sendable (DiscordConnectionStatus) -> Void)? = statusLock.withLock {
+            guard storedConnectionStatus != status else { return nil }
+            storedConnectionStatus = status
+            return connectionStatusHandler
+        }
+        handler?(status)
     }
 }

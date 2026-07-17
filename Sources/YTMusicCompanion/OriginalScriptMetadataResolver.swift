@@ -27,6 +27,14 @@ protocol TrackMetadataResolving: Sendable {
     /// `nil` means a transient network failure; a non-nil source-equivalent value
     /// means the lookup succeeded but found no verified original-script replacement.
     func resolve(for track: NowPlaying) -> TrackMetadata?
+    func resolve(for track: NowPlaying, cancellation: CancellationToken) -> TrackMetadata?
+}
+
+extension TrackMetadataResolving {
+    func resolve(for track: NowPlaying, cancellation: CancellationToken) -> TrackMetadata? {
+        guard !cancellation.isCancelled else { return nil }
+        return resolve(for: track)
+    }
 }
 
 /// Replaces a localized YouTube Music label with its original-script counterpart.
@@ -44,13 +52,22 @@ final class OriginalScriptMetadataResolver: TrackMetadataResolving, @unchecked S
     private var cache: [String: TrackMetadata] = [:]
 
     func resolve(for track: NowPlaying) -> TrackMetadata? {
+        resolve(for: track, cancellation: CancellationToken())
+    }
+
+    func resolve(for track: NowPlaying, cancellation: CancellationToken) -> TrackMetadata? {
+        guard !cancellation.isCancelled else { return nil }
         if let cached = cacheLock.withLock({ cache[track.trackKey] }) {
             return cached
         }
 
-        guard let japaneseResults = fetchJSONResults(url: Self.queryURL(for: track)) else {
+        guard let japaneseResults = fetchJSONResults(
+            url: Self.queryURL(for: track),
+            cancellation: cancellation
+        ) else {
             return nil
         }
+        guard !cancellation.isCancelled else { return nil }
 
         let candidates = Self.rankedCandidates(for: track, from: japaneseResults)
         guard !candidates.isEmpty else {
@@ -69,7 +86,11 @@ final class OriginalScriptMetadataResolver: TrackMetadataResolving, @unchecked S
 
         var completedLookup = false
         for candidate in candidates.prefix(Self.maximumCandidatesToVerify) {
-            guard let results = fetchJSONResults(url: Self.lookupURL(trackID: candidate.trackID)) else {
+            guard !cancellation.isCancelled else { return nil }
+            guard let results = fetchJSONResults(
+                url: Self.lookupURL(trackID: candidate.trackID),
+                cancellation: cancellation
+            ) else {
                 continue
             }
             completedLookup = true
@@ -289,28 +310,24 @@ final class OriginalScriptMetadataResolver: TrackMetadataResolving, @unchecked S
         cacheLock.withLock { cache[key] = metadata }
     }
 
-    private func fetchJSONResults(url: URL?) -> [[String: Any]]? {
+    private func fetchJSONResults(
+        url: URL?,
+        cancellation: CancellationToken
+    ) -> [[String: Any]]? {
         guard let url else { return nil }
-
-        let process = Process()
-        process.executableURL = URL(fileURLWithPath: "/usr/bin/curl")
-        process.arguments = [
-            "-fsSL",
-            "--max-time", "6",
-            "-H", "User-Agent: \(AppConfiguration.userAgent)",
-            url.absoluteString,
-        ]
-
-        let output = Pipe()
-        process.standardOutput = output
-        process.standardError = FileHandle.nullDevice
-        do { try process.run() } catch { return nil }
-
-        let data = output.fileHandleForReading.readDataToEndOfFile()
-        process.waitUntilExit()
+        guard let result = SubprocessRunner.run(
+            executable: "/usr/bin/curl",
+            arguments: [
+                "-fsSL",
+                "--max-time", "6",
+                "-H", "User-Agent: \(AppConfiguration.userAgent)",
+                url.absoluteString,
+            ],
+            timeout: 7,
+            cancellation: cancellation
+        ), result.succeeded else { return nil }
         guard
-            process.terminationStatus == 0,
-            let json = try? JSONSerialization.jsonObject(with: data) as? [String: Any]
+            let json = try? JSONSerialization.jsonObject(with: result.output) as? [String: Any]
         else { return nil }
         return json["results"] as? [[String: Any]]
     }

@@ -13,13 +13,22 @@ final class YouTubeMusicPageMetadataResolver: TrackMetadataResolving, @unchecked
     }
 
     func resolve(for track: NowPlaying) -> TrackMetadata? {
+        resolve(for: track, cancellation: CancellationToken())
+    }
+
+    func resolve(for track: NowPlaying, cancellation: CancellationToken) -> TrackMetadata? {
+        guard !cancellation.isCancelled else { return nil }
         guard track.sourcePID > 0 else { return nil }
         guard AccessibilityPermission.ensureGranted(
             promptingOnce: promptsForAccessibilityPermission
         ) else { return nil }
-        guard let snapshot = YouTubeMusicAccessibility.snapshot(pid: track.sourcePID) else {
+        guard let snapshot = YouTubeMusicAccessibility.snapshot(
+            pid: track.sourcePID,
+            cancellation: cancellation
+        ) else {
             return nil
         }
+        guard !cancellation.isCancelled else { return nil }
         return Self.metadata(
             documentTitle: snapshot.documentTitle,
             playerLinks: snapshot.playerLinks,
@@ -129,13 +138,17 @@ private enum YouTubeMusicAccessibility {
     private static let urlAttribute = kAXURLAttribute as String
     private static let windowsAttribute = kAXWindowsAttribute as String
 
-    static func snapshot(pid: Int32) -> YouTubeMusicAccessibilitySnapshot? {
+    static func snapshot(
+        pid: Int32,
+        cancellation: CancellationToken
+    ) -> YouTubeMusicAccessibilitySnapshot? {
         let application = AXUIElementCreateApplication(pid)
         let roots = elements(application, attribute: windowsAttribute)
             + elements(application, attribute: childrenAttribute)
 
         for root in roots {
-            let descendants = descendants(of: root)
+            guard !cancellation.isCancelled else { return nil }
+            let descendants = descendants(of: root, cancellation: cancellation)
             guard let documentTitle = documentTitle(in: descendants) else { continue }
             let playerLinks = playerLinkLabels(in: descendants)
             return YouTubeMusicAccessibilitySnapshot(
@@ -193,12 +206,17 @@ private enum YouTubeMusicAccessibility {
         return nil
     }
 
-    private static func descendants(of root: AXUIElement, limit: Int = 2_000) -> [AXUIElement] {
+    private static func descendants(
+        of root: AXUIElement,
+        limit: Int = 2_000,
+        cancellation: CancellationToken? = nil
+    ) -> [AXUIElement] {
         var result: [AXUIElement] = []
         var pending = [root]
         var index = 0
 
         while index < pending.count, result.count < limit {
+            if cancellation?.isCancelled == true { break }
             let element = pending[index]
             index += 1
             result.append(element)

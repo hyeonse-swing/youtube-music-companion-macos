@@ -87,13 +87,6 @@ enum LRCLIB {
     // iTunes lookup so both HTTP clients send one consistent User-Agent.
     static let userAgent = AppConfiguration.userAgent
 
-    /// Prefer a romanised version over the canonical Hangul one when a well-timed
-    /// one is available (user preference). Set false to always use the canonical.
-    static let preferRomanized = true
-    /// How far a candidate's first line may differ from the canonical's before we
-    /// consider it a different (mis-synced/shifted) upload and refuse to use it.
-    private static let timingTolerance: Double = 4.0
-
     /// Resolve synced lyrics for a track. `/api/get` returns LRCLIB's single
     /// canonical match (correct timing); we fetch that AND the search candidates
     /// concurrently. The canonical defines the trusted start time. If the user
@@ -113,8 +106,16 @@ enum LRCLIB {
     /// with the automatic recommendation first. The caller can expose the rest to
     /// the user without re-querying or attempting to reconstruct LRCLIB metadata.
     static func fetchCandidates(for track: NowPlaying) -> [LyricCandidate]? {
+        fetchCandidates(for: track, cancellation: CancellationToken())
+    }
+
+    static func fetchCandidates(
+        for track: NowPlaying,
+        cancellation: CancellationToken
+    ) -> [LyricCandidate]? {
+        guard !cancellation.isCancelled else { return nil }
         let fullArtist = normalizedArtist(track.artist)
-        let first = attempt(track, artist: fullArtist)
+        let first = attempt(track, artist: fullArtist, cancellation: cancellation)
         if !first.candidates.isEmpty { return first.candidates }
         // Collaboration credits ("Sunburn et Nelt.", "X feat. Y") usually aren't how
         // LRCLIB indexes the track — it files it under the lead act ("Sunburn"). Retry
@@ -124,7 +125,8 @@ enum LRCLIB {
         let lead = primaryArtist(fullArtist)
         var failed = first.failed
         if lead != fullArtist {
-            let second = attempt(track, artist: lead)
+            guard !cancellation.isCancelled else { return nil }
+            let second = attempt(track, artist: lead, cancellation: cancellation)
             if !second.candidates.isEmpty { return second.candidates }
             failed = failed || second.failed
         }
@@ -146,11 +148,18 @@ enum LRCLIB {
     /// transiently.
     private static func attempt(
         _ track: NowPlaying,
-        artist: String
+        artist: String,
+        cancellation: CancellationToken
     ) -> (candidates: [LyricCandidate], failed: Bool) {
         var failed = false
         for title in titleVariants(track.title) {
-            let r = resolve(track, artist: artist, title: title)
+            guard !cancellation.isCancelled else { return ([], true) }
+            let r = resolve(
+                track,
+                artist: artist,
+                title: title,
+                cancellation: cancellation
+            )
             if !r.candidates.isEmpty { return (r.candidates, false) }
             failed = failed || r.failed
         }
@@ -180,22 +189,38 @@ enum LRCLIB {
     private static func resolve(
         _ track: NowPlaying,
         artist norm: String,
-        title: String
+        title: String,
+        cancellation: CancellationToken
     ) -> (candidates: [LyricCandidate], failed: Bool) {
         let canonicalResult = ConcurrentResult<(candidate: LyricCandidate?, failed: Bool)>((nil, false))
         let searchResult = ConcurrentResult<(candidates: [LyricCandidate], failed: Bool)>(([], false))
         let group = DispatchGroup()
         group.enter()
         DispatchQueue.global().async {
-            canonicalResult.store(getExact(track, artist: norm, title: title))
+            canonicalResult.store(
+                getExact(
+                    track,
+                    artist: norm,
+                    title: title,
+                    cancellation: cancellation
+                )
+            )
             group.leave()
         }
         group.enter()
         DispatchQueue.global().async {
-            searchResult.store(searchCandidates(track, artist: norm, title: title))
+            searchResult.store(
+                searchCandidates(
+                    track,
+                    artist: norm,
+                    title: title,
+                    cancellation: cancellation
+                )
+            )
             group.leave()
         }
         group.wait()
+        guard !cancellation.isCancelled else { return ([], true) }
 
         let canonical = canonicalResult.value
         let search = searchResult.value
@@ -205,23 +230,10 @@ enum LRCLIB {
         let failed = canonical.failed || search.failed
 
         if let canonicalCandidate = canonical.candidate {
-            var ordered = deduplicated([canonicalCandidate] + candidates)
-
-            // Preserve the existing automatic preference, but keep every other
-            // result in the returned list so the user can override it.
-            if preferRomanized,
-               containsHangul(canonicalCandidate.lines),
-               let reference = canonicalCandidate.lines.first?.time,
-               let romanizedIndex = ordered.firstIndex(where: {
-                   !containsHangul($0.lines)
-                       && abs(($0.lines.first?.time ?? .infinity) - reference) <= timingTolerance
-               }),
-               romanizedIndex != 0
-            {
-                let romanized = ordered.remove(at: romanizedIndex)
-                ordered.insert(romanized, at: 0)
-            }
-            return (ordered, false)
+            // The source-script result stays primary. A compatible romanized
+            // candidate can still be used as the optional pronunciation layer or
+            // chosen manually, but it never replaces the original automatically.
+            return (deduplicated([canonicalCandidate] + candidates), false)
         }
 
         // No canonical → ranked search candidates, if any survived the filters.
@@ -302,7 +314,8 @@ enum LRCLIB {
     private static func getExact(
         _ track: NowPlaying,
         artist: String,
-        title: String
+        title: String,
+        cancellation: CancellationToken
     ) -> (candidate: LyricCandidate?, failed: Bool) {
         var comps = URLComponents(string: "https://lrclib.net/api/get")!
         comps.queryItems = [
@@ -311,7 +324,10 @@ enum LRCLIB {
             .init(name: "album_name", value: track.album),
             .init(name: "duration", value: String(Int(track.duration.rounded()))),
         ]
-        guard case .value(let json) = getJSON(comps.url) else { return (nil, true) }
+        guard case .value(let json) = getJSON(
+            comps.url,
+            cancellation: cancellation
+        ) else { return (nil, true) }
         // Definitive JSON answer (possibly a 404 object, or a hit without synced
         // lyrics): not a failure, just no usable canonical.
         guard let dict = json as? [String: Any] else { return (nil, false) }
@@ -327,11 +343,15 @@ enum LRCLIB {
     private static func searchCandidates(
         _ track: NowPlaying,
         artist: String,
-        title: String
+        title: String,
+        cancellation: CancellationToken
     ) -> (candidates: [LyricCandidate], failed: Bool) {
         var comps = URLComponents(string: "https://lrclib.net/api/search")!
         comps.queryItems = [.init(name: "q", value: "\(artist) \(title)")]
-        guard case .value(let json) = getJSON(comps.url) else { return ([], true) }
+        guard case .value(let json) = getJSON(
+            comps.url,
+            cancellation: cancellation
+        ) else { return ([], true) }
         guard let arr = json as? [[String: Any]] else { return ([], false) }
 
         let wantTitle = title.lowercased()
@@ -407,14 +427,20 @@ enum LRCLIB {
     /// a short backoff — a retry almost always succeeds. We only retry parse
     /// failures: a *valid* JSON body (including LRCLIB's 404 "not found" object) is
     /// a real answer and is returned immediately, never retried.
-    private static func getJSON(_ url: URL?) -> JSONResult {
-        guard let url else { return .failure }
+    private static func getJSON(
+        _ url: URL?,
+        cancellation: CancellationToken
+    ) -> JSONResult {
+        guard let url, !cancellation.isCancelled else { return .failure }
         let backoffs: [Double] = [0.3, 0.6]   // delays AFTER attempts 1 and 2; 3 attempts total
         for attempt in 0...backoffs.count {
-            if let json = curlJSON(url) { return .value(json) }
+            guard !cancellation.isCancelled else { return .failure }
+            if let json = curlJSON(url, cancellation: cancellation) { return .value(json) }
             // Parse failed (504 HTML, empty body, or curl error) → transient. Back
             // off briefly and retry, unless this was the last attempt.
-            if attempt < backoffs.count { Thread.sleep(forTimeInterval: backoffs[attempt]) }
+            if attempt < backoffs.count {
+                Thread.sleep(forTimeInterval: backoffs[attempt])
+            }
         }
         return .failure
     }
@@ -422,22 +448,22 @@ enum LRCLIB {
     /// One curl invocation. Returns the parsed JSON, or nil if the body didn't
     /// parse (a 504 HTML page, an empty body, or a curl/network error) — the caller
     /// treats nil as a transient failure worth retrying.
-    private static func curlJSON(_ url: URL) -> Any? {
-        let proc = Process()
-        proc.executableURL = URL(fileURLWithPath: "/usr/bin/curl")
-        proc.arguments = ["-s", "--max-time", "10", "-H", "User-Agent: \(userAgent)", url.absoluteString]
-
-        let pipe = Pipe()
-        proc.standardOutput = pipe
-        // Discard stderr (not just leave it unread): a full, undrained stderr pipe
-        // would block curl → stdout never closes → readDataToEndOfFile() hangs.
-        proc.standardError = FileHandle.nullDevice
-
-        do { try proc.run() } catch { return nil }
-        let data = pipe.fileHandleForReading.readDataToEndOfFile()
-        proc.waitUntilExit()
-
-        return try? JSONSerialization.jsonObject(with: data)
+    private static func curlJSON(
+        _ url: URL,
+        cancellation: CancellationToken
+    ) -> Any? {
+        guard let result = SubprocessRunner.run(
+            executable: "/usr/bin/curl",
+            arguments: [
+                "-s",
+                "--max-time", "10",
+                "-H", "User-Agent: \(userAgent)",
+                url.absoluteString,
+            ],
+            timeout: 11,
+            cancellation: cancellation
+        ), result.succeeded else { return nil }
+        return try? JSONSerialization.jsonObject(with: result.output)
     }
 
     // MARK: - LRC parsing

@@ -38,6 +38,16 @@ struct NowPlaying: Equatable {
     }
 }
 
+protocol NowPlayingQuerying: Sendable {
+    func query(cancellation: CancellationToken) -> NowPlaying?
+}
+
+struct DefaultNowPlayingQuery: NowPlayingQuerying {
+    func query(cancellation: CancellationToken) -> NowPlaying? {
+        MediaRemoteBridge.query(cancellation: cancellation)
+    }
+}
+
 /// Queries macOS now-playing state by running a JXA script through `osascript`.
 ///
 /// Why a subprocess and not a native call (verified on 15.6, not assumed):
@@ -104,38 +114,18 @@ enum MediaRemoteBridge {
 
     /// Runs the JXA query. Blocking — call off the main thread.
     static func query() -> NowPlaying? {
-        let proc = Process()
-        proc.executableURL = URL(fileURLWithPath: "/usr/bin/osascript")
-        proc.arguments = ["-l", "JavaScript", "-e", jxa]
+        query(cancellation: CancellationToken())
+    }
 
-        let pipe = Pipe()
-        proc.standardOutput = pipe
-        // Discard stderr: osascript has no timeout, so an UNREAD stderr pipe that
-        // fills its buffer would block the child → stdout never closes → the
-        // readDataToEndOfFile() below hangs forever. nullDevice can't fill up.
-        proc.standardError = FileHandle.nullDevice
-
-        do {
-            try proc.run()
-        } catch {
-            return nil
-        }
-
-        // osascript has no `--timeout`. If MediaRemote's XPC service wedges, the
-        // read below would block forever — and because the poller only spawns a
-        // new query once the previous one returns (its `isPolling` guard), a single
-        // hung query freezes the overlay permanently. A watchdog kills an overrun
-        // query so polling always recovers; terminating closes the pipe, so the
-        // read unblocks and we fall through to the nil-returning JSON guard.
-        let watchdog = DispatchWorkItem { proc.terminate() }
-        DispatchQueue.global().asyncAfter(deadline: .now() + 5, execute: watchdog)
-
-        let data = pipe.fileHandleForReading.readDataToEndOfFile()
-        proc.waitUntilExit()
-        watchdog.cancel()
-
+    static func query(cancellation: CancellationToken) -> NowPlaying? {
+        guard let result = SubprocessRunner.run(
+            executable: "/usr/bin/osascript",
+            arguments: ["-l", "JavaScript", "-e", jxa],
+            timeout: 5,
+            cancellation: cancellation
+        ), result.succeeded else { return nil }
         guard
-            let json = try? JSONSerialization.jsonObject(with: data) as? [String: Any],
+            let json = try? JSONSerialization.jsonObject(with: result.output) as? [String: Any],
             json["error"] == nil
         else { return nil }
 

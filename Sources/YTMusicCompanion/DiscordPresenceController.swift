@@ -2,6 +2,22 @@ import Foundation
 
 protocol ArtworkResolving: Sendable {
     func coverURL(for track: NowPlaying, sourceArtwork: NowPlayingArtwork) -> String?
+    func coverURL(
+        for track: NowPlaying,
+        sourceArtwork: NowPlayingArtwork,
+        cancellation: CancellationToken
+    ) -> String?
+}
+
+extension ArtworkResolving {
+    func coverURL(
+        for track: NowPlaying,
+        sourceArtwork: NowPlayingArtwork,
+        cancellation: CancellationToken
+    ) -> String? {
+        guard !cancellation.isCancelled else { return nil }
+        return coverURL(for: track, sourceArtwork: sourceArtwork)
+    }
 }
 
 /// Converts YouTube Music snapshots into Discord activity and owns delivery state.
@@ -26,7 +42,11 @@ final class DiscordPresenceController {
     private var artworkMisses = BoundedSet<String>(
         capacity: SessionCacheLimits.negativeResults
     )
-    private var artworkResolving: Set<String> = []
+    private var artworkOperation: CancellableTaskOperation?
+    private var pauseTimer: Timer?
+
+    private(set) var connectionStatus: DiscordConnectionStatus
+    var onConnectionStatusChange: ((DiscordConnectionStatus) -> Void)?
 
     init(
         publisher: PresencePublishing,
@@ -34,6 +54,14 @@ final class DiscordPresenceController {
     ) {
         self.publisher = publisher
         self.artworkResolver = artworkResolver
+        connectionStatus = publisher.connectionStatus
+        publisher.setConnectionStatusHandler { [weak self] status in
+            Task { @MainActor in
+                guard let self else { return }
+                self.connectionStatus = status
+                self.onConnectionStatusChange?(status)
+            }
+        }
     }
 
     var isConfigured: Bool { publisher.isConfigured }
@@ -43,13 +71,19 @@ final class DiscordPresenceController {
         sourceArtwork: NowPlayingArtwork? = nil,
         configuration: DiscordPresenceConfiguration = .standard
     ) {
+        let previousTrackKey = lastTrack?.trackKey
         lastTrack = track
         lastArtwork = sourceArtwork
         lastConfiguration = configuration
         guard track.isPlaying, track.rate > 0 else {
-            clear()
+            handlePausedTrack(
+                track,
+                previousTrackKey: previousTrackKey,
+                policy: configuration.pausePolicy
+            )
             return
         }
+        cancelPauseTimer()
 
         let reference = track.timestamp > 0
             ? track.timestamp
@@ -74,25 +108,31 @@ final class DiscordPresenceController {
             artworkURL: artworkURL,
             configuration: configuration
         )
-        pendingKey = publicationKey
-        let version = stateVersion
+        publish(activity, publicationKey: publicationKey, startEpoch: startEpoch)
+    }
 
-        publisher.setActivity(activity) { [weak self] sent in
-            DispatchQueue.main.async {
-                MainActor.assumeIsolated {
-                    guard let self,
-                          self.stateVersion == version,
-                          self.pendingKey == publicationKey else { return }
-                    self.pendingKey = nil
-                    guard sent else { return }
-                    self.lastPublishedKey = publicationKey
-                    self.lastPublishedStart = startEpoch
-                }
-            }
-        }
+    func publishManual(_ activity: PresenceActivity, sessionKey: String) {
+        cancelPauseTimer()
+        artworkOperation?.cancel()
+        artworkOperation = nil
+        stateVersion += 1
+        pendingKey = nil
+        lastTrack = nil
+        lastArtwork = nil
+        lastConfiguration = .standard
+        let publicationKey = "manual|\(sessionKey)"
+        guard pendingKey != publicationKey, lastPublishedKey != publicationKey else { return }
+        publish(
+            activity,
+            publicationKey: publicationKey,
+            startEpoch: activity.start?.timeIntervalSince1970 ?? 0
+        )
     }
 
     func clear() {
+        cancelPauseTimer()
+        artworkOperation?.cancel()
+        artworkOperation = nil
         let hadPublishedOrPendingActivity = lastPublishedKey != nil || pendingKey != nil
         stateVersion += 1
         lastTrack = nil
@@ -127,7 +167,7 @@ final class DiscordPresenceController {
             : "\(track.title) - \(track.artist)"
         let image = artworkURL ?? YouTubeMusicSource.discordAssetKey
         let content = configuration.content(for: track)
-        let songURL = configuration.showsSongLink ? track.trackURL : nil
+        let links = configuration.links(for: track)
 
         return PresenceActivity(
             name: title,
@@ -139,11 +179,73 @@ final class DiscordPresenceController {
             largeImageText: content.imageText,
             smallImage: YouTubeMusicSource.discordAssetKey,
             smallImageText: YouTubeMusicSource.displayName,
-            largeImageURL: songURL,
-            buttons: songURL.map {
-                [PresenceButton(label: "Listen on YouTube Music", url: $0)]
-            } ?? []
+            detailsURL: links.detailsURL,
+            stateURL: links.stateURL,
+            largeImageURL: links.coverURL,
+            smallImageURL: nil,
+            buttons: links.buttons
         )
+    }
+
+    private func publish(
+        _ activity: PresenceActivity,
+        publicationKey: String,
+        startEpoch: Double
+    ) {
+        guard pendingKey != publicationKey else { return }
+        guard lastPublishedKey != publicationKey else { return }
+        pendingKey = publicationKey
+        let version = stateVersion
+
+        publisher.setActivity(activity) { [weak self] sent in
+            DispatchQueue.main.async {
+                MainActor.assumeIsolated {
+                    guard let self,
+                          self.stateVersion == version,
+                          self.pendingKey == publicationKey else { return }
+                    self.pendingKey = nil
+                    guard sent else { return }
+                    self.lastPublishedKey = publicationKey
+                    self.lastPublishedStart = startEpoch
+                }
+            }
+        }
+    }
+
+    private func handlePausedTrack(
+        _ track: NowPlaying,
+        previousTrackKey: String?,
+        policy: DiscordPausePolicy
+    ) {
+        if let previousTrackKey, previousTrackKey != track.trackKey {
+            clear()
+            return
+        }
+
+        switch policy {
+        case .hideImmediately:
+            clear()
+        case .keepVisible:
+            cancelPauseTimer()
+        case .keepForFiveMinutes, .keepForFifteenMinutes:
+            guard pauseTimer == nil,
+                  lastPublishedKey != nil || pendingKey != nil,
+                  let interval = policy.retentionInterval
+            else {
+                return
+            }
+            pauseTimer = Timer.scheduledTimer(withTimeInterval: interval, repeats: false) {
+                [weak self] _ in
+                Task { @MainActor in
+                    self?.clear()
+                }
+            }
+        }
+    }
+
+    private func cancelPauseTimer() {
+        pauseTimer?.invalidate()
+        pauseTimer = nil
     }
 
     private func resolvedArtwork(
@@ -157,36 +259,65 @@ final class DiscordPresenceController {
         }
         guard
             !artworkMisses.contains(cacheKey),
-            !artworkResolving.contains(cacheKey)
+            artworkOperation?.key != cacheKey
         else { return nil }
-        artworkResolving.insert(cacheKey)
 
+        artworkOperation?.cancel()
         let resolver = artworkResolver
-        DispatchQueue.global(qos: .utility).async { [weak self] in
-            let url = resolver.coverURL(for: track, sourceArtwork: sourceArtwork)
-            DispatchQueue.main.async {
-                MainActor.assumeIsolated {
-                    guard let self else { return }
-                    self.artworkResolving.remove(cacheKey)
-                    if let url {
-                        self.artworkCache[cacheKey] = url
-                    } else {
-                        self.artworkMisses.insert(cacheKey)
-                    }
-                    guard
-                        url != nil,
-                        self.lastTrack?.trackKey == track.trackKey,
-                        self.lastArtwork?.memoryCacheKey == sourceArtwork.memoryCacheKey
-                    else { return }
-                    self.lastPublishedKey = nil
-                    self.update(
-                        for: track,
-                        sourceArtwork: sourceArtwork,
-                        configuration: self.lastConfiguration
-                    )
-                }
-            }
+        let operationID = UUID()
+        let cancellation = CancellationToken()
+        let operation = CancellableTaskOperation(
+            id: operationID,
+            key: cacheKey,
+            cancellation: cancellation
+        )
+        artworkOperation = operation
+        let task = Task.detached(priority: .utility) {
+            let url = resolver.coverURL(
+                for: track,
+                sourceArtwork: sourceArtwork,
+                cancellation: cancellation
+            )
+            await self.finishArtworkResolution(
+                url,
+                track: track,
+                sourceArtwork: sourceArtwork,
+                cacheKey: cacheKey,
+                operationID: operationID,
+                wasCancelled: cancellation.isCancelled
+            )
         }
+        operation.attach(task)
         return nil
+    }
+
+    private func finishArtworkResolution(
+        _ url: String?,
+        track: NowPlaying,
+        sourceArtwork: NowPlayingArtwork,
+        cacheKey: String,
+        operationID: UUID,
+        wasCancelled: Bool
+    ) {
+        guard artworkOperation?.id == operationID else { return }
+        artworkOperation = nil
+        guard !wasCancelled else { return }
+
+        if let url {
+            artworkCache[cacheKey] = url
+        } else {
+            artworkMisses.insert(cacheKey)
+        }
+        guard
+            url != nil,
+            lastTrack?.trackKey == track.trackKey,
+            lastArtwork?.memoryCacheKey == sourceArtwork.memoryCacheKey
+        else { return }
+        lastPublishedKey = nil
+        update(
+            for: track,
+            sourceArtwork: sourceArtwork,
+            configuration: lastConfiguration
+        )
     }
 }

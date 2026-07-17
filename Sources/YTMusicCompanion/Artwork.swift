@@ -3,38 +3,56 @@ import Foundation
 protocol ArtworkCatalogSearching: Sendable {
     /// Returns publicly reachable artwork thumbnails ordered from most to least likely.
     func candidateURLs(for track: NowPlaying) -> [URL]
+    func candidateURLs(for track: NowPlaying, cancellation: CancellationToken) -> [URL]
+}
+
+extension ArtworkCatalogSearching {
+    func candidateURLs(for track: NowPlaying, cancellation: CancellationToken) -> [URL] {
+        guard !cancellation.isCancelled else { return [] }
+        return candidateURLs(for: track)
+    }
 }
 
 protocol ArtworkDataLoading: Sendable {
     func data(from url: URL) -> Data?
+    func data(from url: URL, cancellation: CancellationToken) -> Data?
+}
+
+extension ArtworkDataLoading {
+    func data(from url: URL, cancellation: CancellationToken) -> Data? {
+        guard !cancellation.isCancelled else { return nil }
+        return data(from: url)
+    }
 }
 
 struct ITunesArtworkCatalog: ArtworkCatalogSearching {
     func candidateURLs(for track: NowPlaying) -> [URL] {
         Artwork.iTunesCandidateURLs(for: track)
     }
+
+    func candidateURLs(for track: NowPlaying, cancellation: CancellationToken) -> [URL] {
+        Artwork.iTunesCandidateURLs(for: track, cancellation: cancellation)
+    }
 }
 
 struct CurlArtworkDataLoader: ArtworkDataLoading {
     func data(from url: URL) -> Data? {
-        let process = Process()
-        process.executableURL = URL(fileURLWithPath: "/usr/bin/curl")
-        process.arguments = [
-            "-fsSL",
-            "--max-time", "8",
-            "-H", "User-Agent: \(AppConfiguration.userAgent)",
-            url.absoluteString,
-        ]
+        data(from: url, cancellation: CancellationToken())
+    }
 
-        let output = Pipe()
-        process.standardOutput = output
-        process.standardError = FileHandle.nullDevice
-        do { try process.run() } catch { return nil }
-
-        let data = output.fileHandleForReading.readDataToEndOfFile()
-        process.waitUntilExit()
-        guard process.terminationStatus == 0, !data.isEmpty else { return nil }
-        return data
+    func data(from url: URL, cancellation: CancellationToken) -> Data? {
+        guard let result = SubprocessRunner.run(
+            executable: "/usr/bin/curl",
+            arguments: [
+                "-fsSL",
+                "--max-time", "8",
+                "-H", "User-Agent: \(AppConfiguration.userAgent)",
+                url.absoluteString,
+            ],
+            timeout: 9,
+            cancellation: cancellation
+        ), result.succeeded, !result.output.isEmpty else { return nil }
+        return result.output
     }
 }
 
@@ -53,9 +71,22 @@ struct VerifiedArtworkResolver: ArtworkResolving {
     }
 
     func coverURL(for track: NowPlaying, sourceArtwork: NowPlayingArtwork) -> String? {
-        for candidateURL in catalog.candidateURLs(for: track) {
+        coverURL(
+            for: track,
+            sourceArtwork: sourceArtwork,
+            cancellation: CancellationToken()
+        )
+    }
+
+    func coverURL(
+        for track: NowPlaying,
+        sourceArtwork: NowPlayingArtwork,
+        cancellation: CancellationToken
+    ) -> String? {
+        for candidateURL in catalog.candidateURLs(for: track, cancellation: cancellation) {
+            guard !cancellation.isCancelled else { return nil }
             guard
-                let candidateData = loader.data(from: candidateURL),
+                let candidateData = loader.data(from: candidateURL, cancellation: cancellation),
                 ArtworkImageMatcher.isSameArtwork(sourceArtwork.data, candidateData)
             else { continue }
             return Artwork.upgradedURL(candidateURL).absoluteString
@@ -104,7 +135,7 @@ enum Artwork {
             .init(name: "entity", value: "song"),
             .init(name: "limit", value: "10"),
         ]
-        guard let json = curlJSON(comps.url),
+        guard let json = curlJSON(comps.url, cancellation: CancellationToken()),
               let dict = json as? [String: Any],
               let results = dict["results"] as? [[String: Any]] else { return nil }
 
@@ -124,12 +155,21 @@ enum Artwork {
     /// Returns a small, ordered set of plausible public covers. Pixel verification is
     /// deliberately performed by `VerifiedArtworkResolver`, not by this text search.
     static func iTunesCandidateURLs(for track: NowPlaying) -> [URL] {
+        iTunesCandidateURLs(for: track, cancellation: CancellationToken())
+    }
+
+    static func iTunesCandidateURLs(
+        for track: NowPlaying,
+        cancellation: CancellationToken
+    ) -> [URL] {
+        guard !cancellation.isCancelled else { return [] }
         let firstArtist = LRCLIB.primaryArtist(track.artist)
         let term = normalizeSearchTerm("\(track.title) \(firstArtist)")
         guard !term.isEmpty else { return [] }
 
         var scored: [(url: URL, score: CandidateScore)] = []
         for storefront in [("JP", "ja_jp"), ("US", "en_us")] {
+            guard !cancellation.isCancelled else { return [] }
             var components = URLComponents(string: "https://itunes.apple.com/search")
             components?.queryItems = [
                 .init(name: "term", value: term),
@@ -140,7 +180,10 @@ enum Artwork {
                 .init(name: "limit", value: "15"),
             ]
             guard
-                let json = curlJSON(components?.url) as? [String: Any],
+                let json = curlJSON(
+                    components?.url,
+                    cancellation: cancellation
+                ) as? [String: Any],
                 let results = json["results"] as? [[String: Any]]
             else { continue }
 
@@ -277,21 +320,23 @@ enum Artwork {
     /// One curl invocation. Returns parsed JSON, or nil on a non-JSON/empty body or a
     /// curl/network error. Mirrors `LRCLIB.curlJSON`: stdout pipe, stderr → nullDevice
     /// (an undrained full stderr pipe would deadlock the child), `JSONSerialization`.
-    private static func curlJSON(_ url: URL?) -> Any? {
+    private static func curlJSON(
+        _ url: URL?,
+        cancellation: CancellationToken
+    ) -> Any? {
         guard let url else { return nil }
-        let proc = Process()
-        proc.executableURL = URL(fileURLWithPath: "/usr/bin/curl")
-        proc.arguments = ["-s", "--max-time", "10", "-H", "User-Agent: \(LRCLIB.userAgent)", url.absoluteString]
-
-        let pipe = Pipe()
-        proc.standardOutput = pipe
-        proc.standardError = FileHandle.nullDevice
-
-        do { try proc.run() } catch { return nil }
-        let data = pipe.fileHandleForReading.readDataToEndOfFile()
-        proc.waitUntilExit()
-
-        return try? JSONSerialization.jsonObject(with: data)
+        guard let result = SubprocessRunner.run(
+            executable: "/usr/bin/curl",
+            arguments: [
+                "-s",
+                "--max-time", "10",
+                "-H", "User-Agent: \(LRCLIB.userAgent)",
+                url.absoluteString,
+            ],
+            timeout: 11,
+            cancellation: cancellation
+        ), result.succeeded else { return nil }
+        return try? JSONSerialization.jsonObject(with: result.output)
     }
 
 }

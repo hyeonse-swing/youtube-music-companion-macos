@@ -73,4 +73,45 @@ final class DiscordRPCTests: XCTestCase {
 
         XCTAssertNil(encodedActivity["buttons"])
     }
+
+    func testActivityEncodingIncludesFieldAndAssetURLs() throws {
+        let detailsURL = URL(string: "https://example.com/details")!
+        let stateURL = URL(string: "https://example.com/state")!
+        let coverURL = URL(string: "https://example.com/cover")!
+        let smallURL = URL(string: "https://example.com/source")!
+        let activity = PresenceActivity(
+            name: "YouTube Music",
+            details: "Test Song",
+            state: "Test Artist",
+            start: nil,
+            end: nil,
+            largeImage: "cover",
+            largeImageText: "Album",
+            smallImage: "youtube-music",
+            smallImageText: "YouTube Music",
+            detailsURL: detailsURL,
+            stateURL: stateURL,
+            largeImageURL: coverURL,
+            smallImageURL: smallURL
+        )
+
+        let data = try XCTUnwrap(
+            DiscordRPC.encodedSetActivityCommand(
+                activity,
+                pid: 42,
+                nonce: "test-nonce"
+            )
+        )
+        let object = try XCTUnwrap(
+            JSONSerialization.jsonObject(with: data) as? [String: Any]
+        )
+        let args = try XCTUnwrap(object["args"] as? [String: Any])
+        let encodedActivity = try XCTUnwrap(args["activity"] as? [String: Any])
+        let assets = try XCTUnwrap(encodedActivity["assets"] as? [String: Any])
+
+        XCTAssertEqual(encodedActivity["details_url"] as? String, detailsURL.absoluteString)
+        XCTAssertEqual(encodedActivity["state_url"] as? String, stateURL.absoluteString)
+        XCTAssertEqual(assets["large_url"] as? String, coverURL.absoluteString)
+        XCTAssertEqual(assets["small_url"] as? String, smallURL.absoluteString)
+    }
 }

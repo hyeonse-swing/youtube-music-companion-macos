@@ -75,11 +75,23 @@ enum ArtworkImageMatcher {
 protocol NowPlayingArtworkQuerying: Sendable {
     /// Blocking MediaRemote request. Call from a background task.
     func query() -> NowPlayingArtwork?
+    func query(cancellation: CancellationToken) -> NowPlayingArtwork?
+}
+
+extension NowPlayingArtworkQuerying {
+    func query(cancellation: CancellationToken) -> NowPlayingArtwork? {
+        guard !cancellation.isCancelled else { return nil }
+        return query()
+    }
 }
 
 struct DefaultNowPlayingArtworkQuery: NowPlayingArtworkQuerying {
     func query() -> NowPlayingArtwork? {
         MediaRemoteArtworkBridge.query()
+    }
+
+    func query(cancellation: CancellationToken) -> NowPlayingArtwork? {
+        MediaRemoteArtworkBridge.query(cancellation: cancellation)
     }
 }
 
@@ -89,30 +101,26 @@ struct DefaultNowPlayingArtworkQuery: NowPlayingArtworkQuerying {
 /// base64 to stdout; no artwork is written to disk.
 enum MediaRemoteArtworkBridge {
     static func query(timeout: TimeInterval = 6) -> NowPlayingArtwork? {
+        query(timeout: timeout, cancellation: CancellationToken())
+    }
+
+    static func query(
+        timeout: TimeInterval = 6,
+        cancellation: CancellationToken
+    ) -> NowPlayingArtwork? {
         guard let helpers = helperPaths() else { return nil }
-
-        let process = Process()
-        process.executableURL = URL(fileURLWithPath: "/usr/bin/perl")
-        process.arguments = [
-            helpers.script.path,
-            helpers.library.path,
-            "YTMCPrintNowPlayingArtworkBase64",
-        ]
-
-        let output = Pipe()
-        process.standardOutput = output
-        process.standardError = FileHandle.nullDevice
-        do { try process.run() } catch { return nil }
-
-        let watchdog = DispatchWorkItem { process.terminate() }
-        DispatchQueue.global().asyncAfter(deadline: .now() + timeout, execute: watchdog)
-        let encoded = output.fileHandleForReading.readDataToEndOfFile()
-        process.waitUntilExit()
-        watchdog.cancel()
-
+        guard let result = SubprocessRunner.run(
+            executable: "/usr/bin/perl",
+            arguments: [
+                helpers.script.path,
+                helpers.library.path,
+                "YTMCPrintNowPlayingArtworkBase64",
+            ],
+            timeout: timeout,
+            cancellation: cancellation
+        ), result.succeeded else { return nil }
         guard
-            process.terminationStatus == 0,
-            let base64 = String(data: encoded, encoding: .utf8)?
+            let base64 = String(data: result.output, encoding: .utf8)?
                 .trimmingCharacters(in: .whitespacesAndNewlines),
             let data = Data(base64Encoded: base64, options: .ignoreUnknownCharacters)
         else { return nil }

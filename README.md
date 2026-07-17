@@ -9,10 +9,21 @@ A focused macOS menu-bar app for the installed YouTube Music web app. It:
 - Uses the exact title, artist, and album rendered in YouTube Music's player bar,
   including bilingual labels such as `鋼の羽根 - Iron Feather`.
 - Shows the current track and playback progress in a native **Now Playing** panel.
-- Lets you choose lyric versions, lyric size, timing resets, and separate metadata
-  sources for the app and Discord from a native **Settings** panel.
-- Lets you customize Discord's top line, second line, cover description,
-  playback-time visibility, and song-link visibility with track metadata templates.
+- Keeps the source lyrics as the primary line and can add optional romanization
+  and on-device translation layers for the song's detected language. This is
+  language-aware behavior, not a Japanese-only mode.
+- Lets you choose lyric versions, lyric size, layered-lyric options, timing resets,
+  and separate metadata sources for the app and Discord from a native **Settings** panel.
+- Includes Balanced, Focused, Compact, and Stage overlay presets plus an optional
+  lightweight karaoke line-progress highlight.
+- Lets you pin a local UTF-8 `.lrc` file to the current song, export the active
+  synced lyrics, and safely return to the saved online version.
+- Includes a Discord Studio with live presets, pause behavior, clickable fields,
+  two custom buttons, per-song privacy, and an auto-expiring manual presence mode.
+- Cancels stale lyric, metadata, and artwork work when tracks change, and slows
+  background polling automatically while paused or idle.
+- Includes a **Diagnostics** settings tab for polling, child-process, cache, and
+  live Discord connection status.
 
 Other players and ordinary browser tabs are intentionally ignored.
 
@@ -31,11 +42,37 @@ version, build number, Discord configuration status, bundle identifier, and proj
 - A new song always starts at `0.00s`; a manual timing adjustment is restored only
   when that same recording plays again.
 - **Settings…** (`⌘,`) changes lyric size, resets the current or all timing
-  adjustments, selects an LRCLIB result per song, and independently chooses
-  YouTube Music screen metadata or macOS playback metadata for the app and Discord.
-- The **Discord** settings tab supports `{title}`, `{artist}`, and `{album}` tokens,
-  shows a live preview, lets you show or hide the exact current-song link, and
-  provides **Revert Changes** and **Reset to Defaults**.
+  adjustments, selects an LRCLIB result per song, configures original/romanized/
+  translated lyric layers, and independently chooses YouTube Music screen metadata
+  or macOS playback metadata for the app and Discord.
+- The **Appearance** section applies an overlay preset and its recommended type
+  size in one action. Karaoke progress estimates left-to-right character timing
+  from each LRC line timestamp because standard LRC files do not provide word timing.
+- **Show romanization** works across writing systems and hides duplicate Latin
+  output. A timing-compatible community lyric version is preferred when available;
+  macOS language-aware pronunciation supplies readings for Japanese Kanji and
+  automatic transliteration covers other supported scripts.
+- **Show translation** uses Apple's on-device Translation framework on macOS 15 or
+  later. The source language is detected automatically, the target is selectable,
+  and the full lyric is translated with song context while preserving its original
+  timing. **Natural lyrics** makes Korean sentence endings consistently conversational;
+  **System translation** preserves Apple's output unchanged. Completed translations
+  are cached per song, lyric version, target, and tone, and stale work is cancelled
+  on track changes.
+- The **Local Lyrics** section imports or replaces a timestamped UTF-8 `.lrc`,
+  exports the currently active lyrics, and removes the imported copy only after
+  confirmation. Imported files are user-owned Application Support data and are
+  not removed by **Clear Saved Lyrics**.
+- The **Discord** settings tab has separate **Live** and **Manual** editors. Live
+  mode supports presets, `{title}` / `{artist}` / `{album}` templates, pause
+  retention, clickable card fields, and up to two buttons. Songs can be hidden
+  using a locally saved one-way fingerprint instead of their title or URL.
+- Manual mode can publish an explicitly entered song, cover URL, link, duration,
+  and optional second button for 15 minutes to 2 hours. It is marked as manual in
+  the app, returns to live playback automatically, and is never restored after quit.
+- The **Diagnostics** tab shows the current polling cadence, active work, child
+  process counts, bounded session caches, saved-lyrics disk usage, and Discord
+  publication status. Saved lyrics can be cleared there at any time.
 
 ## Requirements
 
@@ -105,15 +142,31 @@ DISCORD_CLIENT_ID=your_application_id .build/debug/YTMusicCompanion --discord
   and watch URL through macOS Accessibility and rejects a stale previous-track page.
 - `OriginalScriptMetadataResolver.swift`: retains the optional storefront probe used
   by the `--metadata` development command; it is not used for displayed metadata.
-- `PlayerModel.swift`: coordinates playback polling, page metadata, lyrics, timing,
-  and menu state without publishing clock-only changes to every view.
+- `PlayerModel.swift`: coordinates adaptive playback polling, cancellable page
+  metadata/artwork/lyrics work, timing, and menu state without publishing
+  clock-only changes to every view.
+- `CancellationToken.swift` / `SubprocessRunner.swift`: cancel stale Swift work and
+  terminate its `curl`, `osascript`, or artwork-bridge child process.
+- `RuntimeDiagnostics.swift`: polling cadence, binary lyric lookup, Discord state,
+  and the runtime counters rendered by Settings.
 - `DiscordPresenceController.swift`: publishes only pixel-verified public artwork URLs
   and manages successful-send deduplication and retry.
 - `DiscordPresenceConfiguration.swift`: renders and validates the saved Discord text
   templates before they reach the Rich Presence transport.
+- `DiscordStudio.swift`: live presets, link validation, pause policies, and the
+  non-persistent manual-presence model.
 - `DiscordRPC.swift`: dependency-free Discord local IPC client.
-- `Lyrics.swift` / `LyricsCache.swift`: LRCLIB lookup, LRC parsing, and disk cache.
+- `Lyrics.swift` / `LyricsCache.swift`: LRCLIB lookup, LRC parsing, and
+  re-downloadable disk cache.
+- `LyricLayers.swift` / `LyricTranslationCache.swift`: language-aware
+  romanization, aligned optional lyric layers, and version-safe translation cache.
+- `LyricTranslationCoordinator.swift`: cancellable macOS on-device translation
+  tasks that run only after a song or lyric-layer setting changes.
+- `LyricsFileDocument.swift` / `CustomLyricsStore.swift`: validated UTF-8 LRC
+  import/export and per-song user-owned lyrics stored in Application Support.
 - `LyricsView.swift` / `OverlayStyle.swift`: overlay rendering and shared geometry.
+- `OverlayPresentation.swift`: persisted overlay presets and bounded line-progress
+  timing for the optional karaoke highlight.
 - `CompanionPreferences.swift` / `SettingsWindow.swift`: persisted user choices and
   a lazily-created native settings interface whose inactive sections are not rendered.
 - `NowPlayingPanel.swift`: native current-track and playback-progress panel.

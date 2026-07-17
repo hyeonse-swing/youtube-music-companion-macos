@@ -43,4 +43,19 @@ final class LyricsCacheTests: XCTestCase {
         XCTAssertEqual(LyricsCache.load("AC/DC|T.N.T")?.first?.text, "a")
         XCTAssertEqual(LyricsCache.load("AC/DC|Hells Bells")?.first?.text, "b")
     }
+
+    func testStatisticsAndClearCoverEverySavedTrack() {
+        LyricsCache.save([LyricLine(time: 0, text: "a")], for: "A|One")
+        LyricsCache.save([LyricLine(time: 0, text: "b")], for: "B|Two")
+
+        let before = LyricsCache.statistics()
+        XCTAssertEqual(before.fileCount, 2)
+        XCTAssertGreaterThan(before.totalBytes, 0)
+
+        LyricsCache.clear()
+
+        XCTAssertEqual(LyricsCache.statistics(), LyricsCacheStatistics(fileCount: 0, totalBytes: 0))
+        XCTAssertNil(LyricsCache.load("A|One"))
+        XCTAssertNil(LyricsCache.load("B|Two"))
+    }
 }

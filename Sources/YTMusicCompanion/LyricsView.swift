@@ -15,6 +15,7 @@ struct LyricsView: View {
             .opacity(model.isHovering ? 1.0 : 0.62)
             .animation(.easeInOut(duration: 0.25), value: model.isHovering)
             .overlay(alignment: .bottom) { if model.isHovering { syncReadout } }
+            .background { LyricTranslationCoordinator(model: model) }
     }
 
     /// Sync calibration HUD, shown only while hovering: scroll to adjust.
@@ -31,7 +32,7 @@ struct LyricsView: View {
 
     @ViewBuilder
     private var content: some View {
-        if !model.isPlaying {
+        if !model.overlayEnabled || !model.isPlaying {
             Color.clear            // paused / stopped / finished → overlay disappears
         } else if model.lines.isEmpty {
             if model.isFetching {
@@ -41,7 +42,10 @@ struct LyricsView: View {
             }
         } else {
             let fontSize = CGFloat(model.lyricsFontSize)
-            let rowHeight = OverlayStyle.rowHeight(fontSize: fontSize)
+            let rowHeight = OverlayStyle.rowHeight(
+                fontSize: fontSize,
+                layerCount: model.visibleLyricLayerCount
+            )
             let visibleIndices = LyricRenderWindow.indices(
                 lineCount: model.lines.count,
                 currentIndex: model.currentIndex
@@ -81,20 +85,64 @@ struct LyricsView: View {
         let d = abs(idx - cur)
 
         // Current line + 1 neighbour each side; everything further is hidden.
-        let opacity: Double = isCurrent ? 1 : (d == 1 ? 0.42 : 0)
-        let blur: Double = isCurrent ? 0 : (d == 1 ? 1.5 : 0)
+        let opacity: Double = isCurrent
+            ? 1
+            : (d == 1 ? model.overlayPreset.neighborOpacity : 0)
+        let blur: Double = isCurrent
+            ? 0
+            : (d == 1 ? model.overlayPreset.neighborBlur : 0)
         // Size difference via scaleEffect (a smooth transform), NOT font size —
         // changing the font size re-lays-out and re-rasterises the text, which
         // pops instead of animating (very visible with CJK / Korean glyphs).
         let scale = isCurrent
             ? 1.0
-            : OverlayStyle.neighborFontSize(fontSize: fontSize) / fontSize
+            : model.overlayPreset.neighborScale
 
-        return Text(line.text.isEmpty ? "♪" : line.text)
-            .font(.system(size: fontSize, weight: .bold, design: fontDesign))
-            .foregroundStyle(.white)
-            .lineLimit(1)                       // never wrap…
-            .minimumScaleFactor(0.45)           // …shrink long lines to fit one line
+        return VStack(spacing: OverlayStyle.layerSpacing(fontSize)) {
+            if isCurrent, model.karaokeModeEnabled, !line.text.isEmpty {
+                KaraokeProgressText(
+                    model: model,
+                    lineIndex: idx,
+                    text: line.text,
+                    fontSize: fontSize,
+                    fontDesign: fontDesign
+                )
+            } else {
+                Text(line.text.isEmpty ? "♪" : line.text)
+                    .font(.system(size: fontSize, weight: .bold, design: fontDesign))
+                    .foregroundStyle(.white)
+                    .lineLimit(1)
+                    .minimumScaleFactor(0.45)
+            }
+
+            if let romanized = model.romanizedText(at: idx) {
+                Text(romanized)
+                    .font(
+                        .system(
+                            size: OverlayStyle.romanizedFontSize(fontSize),
+                            weight: .medium,
+                            design: fontDesign
+                        )
+                    )
+                    .foregroundStyle(.white.opacity(0.82))
+                    .lineLimit(1)
+                    .minimumScaleFactor(0.55)
+            }
+
+            if let translated = model.translatedText(at: idx) {
+                Text(translated)
+                    .font(
+                        .system(
+                            size: OverlayStyle.translatedFontSize(fontSize),
+                            weight: .regular,
+                            design: fontDesign
+                        )
+                    )
+                    .foregroundStyle(.white.opacity(0.72))
+                    .lineLimit(1)
+                    .minimumScaleFactor(0.55)
+            }
+        }
             .frame(maxWidth: .infinity)
             .padding(.horizontal, OverlayStyle.horizontalPadding)
             .opacity(opacity)
@@ -129,5 +177,54 @@ struct LyricsView: View {
             ],
             startPoint: .top, endPoint: .bottom
         )
+    }
+}
+
+private struct KaraokeProgressText: View {
+    @ObservedObject var model: PlayerModel
+    @Environment(\.accessibilityReduceMotion) private var reduceMotion
+
+    let lineIndex: Int
+    let text: String
+    let fontSize: CGFloat
+    let fontDesign: Font.Design
+
+    var body: some View {
+        if reduceMotion {
+            lyricText(AttributedString(text))
+                .foregroundStyle(.white)
+        } else {
+            TimelineView(.periodic(from: .now, by: 1.0 / 10.0)) { context in
+                lyricText(
+                    highlightedText(
+                        progress: model.karaokeProgress(
+                            for: lineIndex,
+                            at: context.date
+                        )
+                    )
+                )
+            }
+        }
+    }
+
+    private func lyricText(_ attributedText: AttributedString) -> some View {
+        Text(attributedText)
+            .font(.system(size: fontSize, weight: .bold, design: fontDesign))
+            .lineLimit(1)
+            .minimumScaleFactor(0.45)
+            .accessibilityLabel(text)
+    }
+
+    private func highlightedText(progress: Double) -> AttributedString {
+        let highlightedCount = LyricKaraokeTimeline.highlightedCharacterCount(
+            in: text,
+            progress: progress
+        )
+        var highlighted = AttributedString(String(text.prefix(highlightedCount)))
+        highlighted.foregroundColor = .white
+        var upcoming = AttributedString(String(text.dropFirst(highlightedCount)))
+        upcoming.foregroundColor = .white.opacity(0.42)
+        highlighted.append(upcoming)
+        return highlighted
     }
 }
