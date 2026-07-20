@@ -345,15 +345,33 @@ enum LyricRomanizer {
 
     static func romanized(_ text: String, language: NLLanguage?) -> String? {
         let original = normalized(text)
-        guard !original.isEmpty else { return nil }
+        guard !original.isEmpty, containsNonLatinScript(original) else {
+            return nil
+        }
 
         let transformed = languageAwareLatinTranscription(
             text,
             language: language
         ) ?? text.applyingTransform(.toLatin, reverse: false)
         guard let transformed else { return nil }
-        let result = normalized(transformed)
-        guard !result.isEmpty, result != original else { return nil }
+        return displayableRomanization(transformed, for: original)
+    }
+
+    /// Final presentation guard shared by generated and community-provided
+    /// pronunciation lines. Latin-script source text is already readable as its
+    /// own pronunciation, regardless of the language detected for the whole song.
+    static func displayableRomanization(
+        _ candidate: String,
+        for original: String
+    ) -> String? {
+        let source = normalized(original)
+        let result = normalized(candidate)
+        guard
+            !source.isEmpty,
+            containsNonLatinScript(source),
+            !result.isEmpty,
+            result != source
+        else { return nil }
         return result
     }
 
@@ -513,17 +531,17 @@ enum LyricRomanizer {
         let eligible = candidates.filter {
             $0.script == .latin && $0.lines != source
         }
+        let pronunciationIndices = source.indices.filter {
+            let text = source[$0].text.trimmingCharacters(
+                in: .whitespacesAndNewlines
+            )
+            return !text.isEmpty && containsNonLatinScript(text)
+        }
         let requiredCount = max(
             1,
             Int(
                 ceil(
-                    Double(
-                        source.filter {
-                            !$0.text.trimmingCharacters(
-                                in: .whitespacesAndNewlines
-                            ).isEmpty
-                        }.count
-                    )
+                    Double(pronunciationIndices.count)
                         * communityCoverageThreshold
                 )
             )
@@ -531,9 +549,17 @@ enum LyricRomanizer {
 
         return eligible.compactMap { candidate -> (lines: [String], matches: Int, drift: Double)? in
             let aligned = align(source: source, candidate: candidate.lines)
-            let matches = aligned.values.compactMap { $0 }.count
+            let matches = pronunciationIndices.compactMap {
+                aligned.values[$0]
+            }.count
             guard matches >= requiredCount else { return nil }
-            let lines = source.indices.map { aligned.values[$0] ?? "" }
+            let lines = source.indices.map { index in
+                guard let candidate = aligned.values[index] else { return "" }
+                return displayableRomanization(
+                    candidate,
+                    for: source[index].text
+                ) ?? ""
+            }
             return (lines, matches, aligned.totalDrift)
         }
         .sorted {
@@ -584,8 +610,24 @@ enum LyricRomanizer {
 
     private static func containsNonLatinScript(_ text: String) -> Bool {
         text.unicodeScalars.contains {
-            CharacterSet.letters.contains($0) && $0.value > 0x024F
+            CharacterSet.letters.contains($0) && !isLatinLetter($0.value)
         }
+    }
+
+    private static func isLatinLetter(_ value: UInt32) -> Bool {
+        (0x0041...0x005A).contains(value)
+            || (0x0061...0x007A).contains(value)
+            || (0x00C0...0x024F).contains(value)
+            || (0x0250...0x02AF).contains(value)
+            || (0x1E00...0x1EFF).contains(value)
+            || (0x2C60...0x2C7F).contains(value)
+            || (0xA720...0xA7FF).contains(value)
+            || (0xAB30...0xAB6F).contains(value)
+            || (0xFB00...0xFB06).contains(value)
+            || (0xFF21...0xFF3A).contains(value)
+            || (0xFF41...0xFF5A).contains(value)
+            || (0x10780...0x107BF).contains(value)
+            || (0x1DF00...0x1DFFF).contains(value)
     }
 
     private static func normalized(_ text: String) -> String {

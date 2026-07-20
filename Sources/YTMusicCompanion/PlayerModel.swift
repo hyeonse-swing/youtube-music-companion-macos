@@ -210,9 +210,16 @@ final class PlayerModel: ObservableObject {
     }
 
     func romanizedText(at index: Int) -> String? {
-        guard showsRomanizedLyrics, romanizedLines.indices.contains(index) else { return nil }
+        guard
+            showsRomanizedLyrics,
+            lines.indices.contains(index),
+            romanizedLines.indices.contains(index)
+        else { return nil }
         let text = romanizedLines[index]
-        return text.isEmpty ? nil : text
+        return LyricRomanizer.displayableRomanization(
+            text,
+            for: lines[index].text
+        )
     }
 
     func translatedText(at index: Int) -> String? {

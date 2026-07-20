@@ -20,7 +20,47 @@ final class LyricLayersTests: XCTestCase {
 
     func testRomanizationHidesLatinAndEmptyText() {
         XCTAssertNil(LyricRomanizer.romanized("Hello world", language: .english))
+        XCTAssertNil(
+            LyricRomanizer.romanized(
+                "I'm alive — don't stop!",
+                language: .japanese
+            )
+        )
+        XCTAssertNil(
+            LyricRomanizer.romanized(
+                "Tôi yêu tiếng Việt",
+                language: .vietnamese
+            )
+        )
+        XCTAssertNil(
+            LyricRomanizer.romanized(
+                "déjà vu · İstanbul · shōnen",
+                language: nil
+            )
+        )
+        XCTAssertNil(
+            LyricRomanizer.romanized(
+                "ɪŋɡlɪʃ",
+                language: nil
+            )
+        )
         XCTAssertNil(LyricRomanizer.romanized("   ", language: nil))
+    }
+
+    func testMixedSongHidesAlreadyLatinLines() {
+        let source = [
+            LyricLine(time: 1, text: "鋼の羽根"),
+            LyricLine(time: 4, text: "I can fly"),
+        ]
+
+        XCTAssertEqual(
+            LyricRomanizer.romanizedLines(
+                source,
+                candidates: [],
+                sourceLanguage: .japanese
+            ),
+            ["hagane no hane", ""]
+        )
     }
 
     func testJapaneseKanaIsRomanizedWithoutTreatingKanjiAsChinese() {
@@ -91,6 +131,59 @@ final class LyricLayersTests: XCTestCase {
                 sourceLanguage: .japanese
             ),
             ["Hagane no hane", "Sora wo tobu"]
+        )
+    }
+
+    func testCommunityRomanizationHidesAlreadyLatinLines() {
+        let originals = [
+            LyricLine(time: 1, text: "鋼の羽根"),
+            LyricLine(time: 4, text: "I can fly"),
+        ]
+        let candidate = LyricCandidate(
+            id: "mixed-romanized",
+            title: "Iron Feather",
+            artist: "Artist",
+            album: "Album",
+            duration: 180,
+            lines: [
+                LyricLine(time: 1.1, text: "Hagane no hane"),
+                LyricLine(time: 4.1, text: "I can fly"),
+            ]
+        )
+
+        XCTAssertEqual(
+            LyricRomanizer.romanizedLines(
+                originals,
+                candidates: [candidate],
+                sourceLanguage: .japanese
+            ),
+            ["Hagane no hane", ""]
+        )
+    }
+
+    func testLatinOnlyCommunityMatchesDoNotSelectARomanizationVersion() {
+        let originals = [
+            LyricLine(time: 1, text: "鋼の羽根"),
+            LyricLine(time: 4, text: "I can fly"),
+        ]
+        let incompleteCandidate = LyricCandidate(
+            id: "english-only",
+            title: "Iron Feather",
+            artist: "Artist",
+            album: "Album",
+            duration: 180,
+            lines: [
+                LyricLine(time: 4.1, text: "I can fly"),
+            ]
+        )
+
+        XCTAssertEqual(
+            LyricRomanizer.romanizedLines(
+                originals,
+                candidates: [incompleteCandidate],
+                sourceLanguage: .japanese
+            ),
+            ["hagane no hane", ""]
         )
     }
 
