@@ -155,7 +155,7 @@ final class AppInformationWindowController: NSWindowController {
 
     func show(language: AppLanguage = .system) {
         update(language: language)
-        NSApp.activate()
+        NSApp.activate(ignoringOtherApps: true)
         centerOnPrimaryDisplay()
         window?.makeKeyAndOrderFront(nil)
         window?.orderFrontRegardless()

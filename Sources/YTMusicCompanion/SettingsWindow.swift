@@ -115,8 +115,8 @@ private struct SettingsEmptyState: View {
     let language: AppLanguage
 
     var body: some View {
-        ContentUnavailableView(
-            AppLocalization.string(title, language: language),
+        AppContentUnavailableView(
+            verbatimTitle: AppLocalization.string(title, language: language),
             systemImage: systemImage,
             description: Text(
                 AppLocalization.string(description, language: language)
@@ -450,7 +450,7 @@ private struct LyricsSettingsView: View {
                     ProgressView("Finding synced lyrics…")
                         .controlSize(.small)
                 } else if model.hasCustomLyrics {
-                    ContentUnavailableView(
+                    AppContentUnavailableView(
                         "Using Imported Lyrics",
                         systemImage: "doc.badge.checkmark",
                         description: Text(
@@ -460,7 +460,7 @@ private struct LyricsSettingsView: View {
                         )
                     )
                 } else if !model.lines.isEmpty {
-                    ContentUnavailableView(
+                    AppContentUnavailableView(
                         "Using Saved Lyrics",
                         systemImage: "checkmark.circle",
                         description: Text(
@@ -470,7 +470,7 @@ private struct LyricsSettingsView: View {
                         )
                     )
                 } else {
-                    ContentUnavailableView(
+                    AppContentUnavailableView(
                         "No Lyric Choices",
                         systemImage: "text.badge.xmark",
                         description: Text(
@@ -759,6 +759,7 @@ private struct DiscordSettingsView: View {
 
     @ObservedObject var model: PlayerModel
     @State private var draft: DiscordPresenceConfiguration
+    @State private var observedConfiguration: DiscordPresenceConfiguration
     @State private var manualDraft: ManualDiscordPresence
     @State private var editorMode = EditorMode.live
     @State private var manualError: String?
@@ -767,6 +768,9 @@ private struct DiscordSettingsView: View {
     init(model: PlayerModel) {
         self.model = model
         _draft = State(initialValue: model.discordPresenceConfiguration)
+        _observedConfiguration = State(
+            initialValue: model.discordPresenceConfiguration
+        )
         _manualDraft = State(initialValue: Self.manualDraft(from: model.discordPreviewTrack))
     }
 
@@ -823,8 +827,9 @@ private struct DiscordSettingsView: View {
             }
         }
         .formStyle(.grouped)
-        .onChange(of: model.discordPresenceConfiguration) { oldValue, newValue in
-            if draft == oldValue { draft = newValue }
+        .onChange(of: model.discordPresenceConfiguration) { newValue in
+            if draft == observedConfiguration { draft = newValue }
+            observedConfiguration = newValue
         }
         .alert("Clear all private songs?", isPresented: $confirmsClearPrivacy) {
             Button("Cancel", role: .cancel) {}
@@ -850,8 +855,8 @@ private struct DiscordSettingsView: View {
                     .tag(preset)
                 }
             }
-            .onChange(of: draft.preset) { oldValue, newValue in
-                guard oldValue != newValue, newValue != .custom else { return }
+            .onChange(of: draft.preset) { newValue in
+                guard newValue != .custom else { return }
                 draft = newValue.applying(to: draft)
             }
             Text(
@@ -1578,7 +1583,7 @@ final class SettingsWindowController: NSWindowController, NSWindowDelegate {
     }
 
     func show() {
-        NSApp.activate()
+        NSApp.activate(ignoringOtherApps: true)
         if window?.isVisible != true { window?.center() }
         window?.makeKeyAndOrderFront(nil)
         window?.orderFrontRegardless()

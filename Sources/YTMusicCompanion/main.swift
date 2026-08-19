@@ -256,6 +256,21 @@ final class AppDelegate: NSObject, NSApplicationDelegate {
     }
 }
 
+// Release-build smoke test. This intentionally runs before NSApplication starts
+// so build-app.sh can prove that the assembled app is self-contained.
+if CommandLine.arguments.contains("--check-resources") {
+    let missing = AppResources.missingRequiredResources
+    guard missing.isEmpty else {
+        FileHandle.standardError.write(
+            "RESOURCES → missing: \(missing.joined(separator: ", "))\n"
+                .data(using: .utf8)!
+        )
+        exit(1)
+    }
+    print("RESOURCES → \(AppResources.sourceDescription): ok")
+    exit(0)
+}
+
 // Debug: read the exact labels visible in YouTube Music's player bar.
 if CommandLine.arguments.contains("--now-page") ||
     CommandLine.arguments.contains("--now-original")

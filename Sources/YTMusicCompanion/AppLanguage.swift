@@ -52,8 +52,7 @@ enum AppLocalization {
     ) -> String {
         let identifier = language.resolvedIdentifier
         guard
-            let path = Bundle.module.path(forResource: identifier, ofType: "lproj"),
-            let bundle = Bundle(path: path)
+            let bundle = AppResources.localizationBundle(identifier)
         else {
             return value ?? key
         }

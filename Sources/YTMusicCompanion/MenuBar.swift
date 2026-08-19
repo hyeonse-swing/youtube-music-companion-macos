@@ -115,7 +115,10 @@ final class MenuBar: NSObject, NSMenuDelegate {
         // square, so it never squashes; isTemplate lets macOS tint it for light/dark
         // menubars. Size below is tuned to the original's menubar footprint.
         if let button = statusItem.button {
-            let image = Bundle.module.url(forResource: "tray-icon", withExtension: "png")
+            let image = AppResources.url(
+                forResource: "tray-icon",
+                withExtension: "png"
+            )
                 .flatMap { NSImage(contentsOf: $0) }
             image?.isTemplate = true
             image?.size = NSSize(width: 16, height: 16)

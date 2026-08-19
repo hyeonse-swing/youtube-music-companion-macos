@@ -54,7 +54,7 @@ final class TranslationHostWindowController: NSWindowController {
         if visible {
             presentedRequestID = requestID
             if !window.isVisible { window.center() }
-            NSApp.activate()
+            NSApp.activate(ignoringOtherApps: true)
             window.makeKeyAndOrderFront(nil)
             window.orderFrontRegardless()
         } else if presentedRequestID == requestID {

@@ -2,6 +2,29 @@ import XCTest
 @testable import YTMusicCompanion
 
 final class AppLanguageTests: XCTestCase {
+    func testApplicationBundleDetectionDoesNotDependOnOSVersion() {
+        XCTAssertTrue(
+            AppResources.isApplicationBundleURL(
+                URL(fileURLWithPath: "/Applications/YTMusicCompanion.app")
+            )
+        )
+        XCTAssertTrue(
+            AppResources.isApplicationBundleURL(
+                URL(fileURLWithPath: "/tmp/YT MUSIC COMPANION.APP")
+            )
+        )
+        XCTAssertFalse(
+            AppResources.isApplicationBundleURL(
+                URL(fileURLWithPath: "/tmp/.build/release/YTMusicCompanion")
+            )
+        )
+    }
+
+    func testSwiftPackageResourcesAreComplete() {
+        XCTAssertEqual(AppResources.missingRequiredResources, [])
+        XCTAssertEqual(AppResources.sourceDescription, "SwiftPM module")
+    }
+
     func testExplicitLanguageDoesNotDependOnSystemPreferences() {
         XCTAssertEqual(
             AppLanguage.english.resolvedIdentifier(preferredLanguages: ["ko-KR"]),

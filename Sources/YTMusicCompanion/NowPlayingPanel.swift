@@ -18,7 +18,7 @@ private struct NowPlayingPanelView: View {
             if let source = model.sourceNowPlaying {
                 trackContent(source: source, display: model.displayNowPlaying ?? source)
             } else {
-                ContentUnavailableView(
+                AppContentUnavailableView(
                     "Nothing Playing",
                     systemImage: "music.note",
                     description: Text("Start a song in YouTube Music to see it here.")
@@ -168,7 +168,7 @@ final class NowPlayingWindowController: NSWindowController, NSWindowDelegate {
     }
 
     func show() {
-        NSApp.activate()
+        NSApp.activate(ignoringOtherApps: true)
         centerOnPrimaryDisplay()
         window?.makeKeyAndOrderFront(nil)
         window?.orderFrontRegardless()

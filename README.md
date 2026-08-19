@@ -81,7 +81,8 @@ version, build number, Discord configuration status, bundle identifier, and proj
 
 ## Requirements
 
-- macOS 14 or later
+- macOS 13 or later
+- Apple Silicon or Intel Mac (Universal app)
 - Discord desktop app for Rich Presence
 - YouTube Music installed as a Chromium web app
 - Swift 5.9 or later to build from source
@@ -135,6 +136,7 @@ Useful probes:
 .build/debug/YTMusicCompanion --probe "Artist" "Title" 200
 .build/debug/YTMusicCompanion --art "Artist" "Title"
 DISCORD_CLIENT_ID=your_application_id .build/debug/YTMusicCompanion --discord
+.build/debug/YTMusicCompanion --check-resources
 ```
 
 ## Architecture
@@ -196,7 +198,11 @@ DISCORD_CLIENT_ID=your_application_id ./scripts/build-app.sh
 open YTMusicCompanion.app
 ```
 
-The generated app is ad-hoc signed for local use. Distribution to other Macs requires a Developer ID signature and notarization.
+The generated Universal app contains native Apple Silicon and Intel code and is
+ad-hoc signed for local use. Distribution to other Macs requires a Developer ID
+signature and notarization.
+The release build also runs a standalone resource check so the installed app does
+not depend on the source checkout or SwiftPM build directory remaining on disk.
 
 ## License
 
