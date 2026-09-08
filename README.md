@@ -29,6 +29,21 @@ A focused macOS menu-bar app for the installed YouTube Music web app. It:
 
 Other players and ordinary browser tabs are intentionally ignored.
 
+## YouTube Music priority
+
+While Companion and the installed YouTube Music player are running, Companion
+assigns the system media-control target to YouTube Music, including while paused.
+Headset transport controls therefore use the music player even when a browser
+video starts. Quitting Companion or closing the music app releases this preference.
+Track metadata is queried directly from the YouTube Music client, independently
+of the system's selected player. No playback command is sent when assigning priority.
+
+This uses dynamically resolved private MediaRemote APIs. If an API is unavailable,
+the app still launches and falls back to the existing metadata query; priority is
+not guaranteed on an untested macOS version. Hardware headset behavior must be
+checked on the actual device. macOS 13 remains the minimum supported build target.
+
+
 Use **About YT Music Companion…** in the menu-bar menu to check the installed
 version, build number, Discord configuration status, bundle identifier, and project link.
 

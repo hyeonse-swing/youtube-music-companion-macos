@@ -21,6 +21,7 @@ xcrun clang \
     -mmacosx-version-min="${MINIMUM_SYSTEM_VERSION}" \
     -framework Foundation \
     Support/ArtworkBridge/ArtworkBridge.m \
+    Support/ArtworkBridge/NowPlayingBridge.m \
     -o "$OUTPUT"
 
 codesign --force --sign - "$OUTPUT" >/dev/null 2>&1 || true

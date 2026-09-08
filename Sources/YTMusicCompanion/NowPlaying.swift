@@ -118,6 +118,20 @@ enum MediaRemoteBridge {
     }
 
     static func query(cancellation: CancellationToken) -> NowPlaying? {
+        if let helpers = MediaRemoteArtworkBridge.helperPaths(),
+           let result = SubprocessRunner.run(
+               executable: "/usr/bin/perl",
+               arguments: [helpers.script.path, helpers.library.path, "YTMCPrintYouTubeMusicNowPlaying"],
+               timeout: 5,
+               cancellation: cancellation
+           ), result.succeeded,
+           let json = try? JSONSerialization.jsonObject(with: result.output) as? [String: Any],
+           json["error"] == nil {
+            return decode(json)
+        }
+        guard !cancellation.isCancelled else { return nil }
+        // Older OS/frameworks and development builds without the helper retain
+        // the original source-filtered query.
         guard let result = SubprocessRunner.run(
             executable: "/usr/bin/osascript",
             arguments: ["-l", "JavaScript", "-e", jxa],
@@ -129,6 +143,11 @@ enum MediaRemoteBridge {
             json["error"] == nil
         else { return nil }
 
+        return decode(json)
+    }
+
+    static func decode(_ json: [String: Any]) -> NowPlaying? {
+        guard json["error"] == nil, let title = json["Title"] as? String, !title.isEmpty else { return nil }
         func str(_ k: String) -> String { (json[k] as? String) ?? "" }
         func num(_ k: String) -> Double { (json[k] as? NSNumber)?.doubleValue ?? 0 }
 

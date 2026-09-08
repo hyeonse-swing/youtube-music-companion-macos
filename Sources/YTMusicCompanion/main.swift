@@ -30,7 +30,8 @@ final class AppDelegate: NSObject, NSApplicationDelegate {
     private var window: NSWindow!
     private let discord = DiscordRPC(clientID: AppConfiguration.discordClientID)
     private lazy var model = PlayerModel(
-        presenceController: DiscordPresenceController(publisher: discord)
+        presenceController: DiscordPresenceController(publisher: discord),
+        mediaPriority: SystemMediaPriority()
     )
     private var hoverTimer: Timer?
     private var activity: NSObjectProtocol?

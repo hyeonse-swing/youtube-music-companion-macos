@@ -343,6 +343,7 @@ final class PlayerModel: ObservableObject {
     private var pollTimer: Timer?
     private var tickTimer: Timer?
     private var isStarted = false
+    private let mediaPriority: SystemMediaPriority?
     private var pollOperation: CancellableTaskOperation?
     private var metadataOperation: CancellableTaskOperation?
     private var artworkOperation: CancellableTaskOperation?
@@ -356,8 +357,10 @@ final class PlayerModel: ObservableObject {
         metadataResolver: TrackMetadataResolving = YouTubeMusicPageMetadataResolver(),
         nowPlayingQuery: NowPlayingQuerying = DefaultNowPlayingQuery(),
         artworkQuery: NowPlayingArtworkQuerying = DefaultNowPlayingArtworkQuery(),
-        defaults: UserDefaults = .standard
+        defaults: UserDefaults = .standard,
+        mediaPriority: SystemMediaPriority? = nil
     ) {
+        self.mediaPriority = mediaPriority
         let preferences = CompanionPreferences(defaults: defaults)
         self.presenceController = presenceController
         self.metadataResolver = metadataResolver
@@ -413,6 +416,7 @@ final class PlayerModel: ObservableObject {
                 || romanizationTask != nil || manualPresenceTimer != nil
         else { return }
         isStarted = false
+        mediaPriority?.release()
         pollTimer?.invalidate()
         pollTimer = nil
         tickTimer?.invalidate()
@@ -478,6 +482,7 @@ final class PlayerModel: ObservableObject {
             return
         }
 
+        mediaPriority?.update(source)
         let previousTrack = sourceNowPlaying
         apply(source)
         let finishedAt = Date()

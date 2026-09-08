@@ -143,7 +143,7 @@ enum MediaRemoteArtworkBridge {
         return NowPlayingArtwork(data: data, width: 0, height: 0)
     }
 
-    private static func helperPaths() -> (script: URL, library: URL)? {
+    static func helperPaths() -> (script: URL, library: URL)? {
         let fileManager = FileManager.default
         let resourceDirectory = Bundle.main.resourceURL
         let currentDirectory = URL(
