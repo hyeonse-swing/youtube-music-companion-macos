@@ -1,5 +1,6 @@
 #import <Foundation/Foundation.h>
 #import <objc/message.h>
+#import "NowPlayingSelection.h"
 #include <stdio.h>
 
 /// Loaded by Apple's `perl` process. MediaRemote permits that platform-signed
@@ -7,18 +8,25 @@
 /// Returning base64 keeps the process boundary simple and avoids temporary files.
 __attribute__((visibility("default")))
 void YTMCPrintNowPlayingArtworkBase64(void) {
-    NSBundle *mediaRemote = [NSBundle bundleWithPath:
-        @"/System/Library/PrivateFrameworks/MediaRemote.framework/"];
-    if (![mediaRemote isLoaded] && ![mediaRemote load]) {
-        return;
-    }
+    dispatch_time_t deadline = dispatch_time(DISPATCH_TIME_NOW, 4 * NSEC_PER_SEC);
+    // Reserve time for the targeted artwork request within the same four
+    // seconds as the metadata selection.
+    YTMCNowPlayingSelection *selection = YTMCSelectPreferredNowPlaying(2.5);
+    if (!selection) return;
 
     Class requestClass = NSClassFromString(@"MRNowPlayingRequest");
-    if (requestClass == Nil) {
+    id path = YTMCPlayerPathForClient(selection.client);
+    if (!path || ![requestClass instancesRespondToSelector:@selector(initWithPlayerPath:)])
+        return;
+
+    id request;
+    @try {
+        id (*initWithPath)(id, SEL, id) = (id (*)(id, SEL, id))objc_msgSend;
+        request = initWithPath([requestClass alloc], @selector(initWithPlayerPath:), path);
+    } @catch (NSException *exception) {
         return;
     }
-
-    id request = [[requestClass alloc] init];
+    if (!request) return;
     SEL selector = NSSelectorFromString(
         @"requestNowPlayingItemArtworkOnQueue:completion:"
     );
@@ -35,7 +43,8 @@ void YTMCPrintNowPlayingArtworkBase64(void) {
             if ([artwork respondsToSelector:imageDataSelector]) {
                 NSData *(*sendImageData)(id, SEL) =
                     (NSData *(*)(id, SEL))objc_msgSend;
-                imageData = [sendImageData(artwork, imageDataSelector) copy];
+                id data = sendImageData(artwork, imageDataSelector);
+                if ([data isKindOfClass:NSData.class]) imageData = [data copy];
             }
         }
         dispatch_semaphore_signal(semaphore);
@@ -43,9 +52,12 @@ void YTMCPrintNowPlayingArtworkBase64(void) {
 
     void (*sendRequest)(id, SEL, dispatch_queue_t, id) =
         (void (*)(id, SEL, dispatch_queue_t, id))objc_msgSend;
-    sendRequest(request, selector, queue, completion);
+    @try {
+        sendRequest(request, selector, queue, completion);
+    } @catch (NSException *exception) {
+        return;
+    }
 
-    dispatch_time_t deadline = dispatch_time(DISPATCH_TIME_NOW, 4 * NSEC_PER_SEC);
     if (dispatch_semaphore_wait(semaphore, deadline) != 0 || imageData.length == 0) {
         return;
     }

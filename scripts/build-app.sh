@@ -6,13 +6,15 @@ cd "$(dirname "$0")/.."
 
 APP="YTMusicCompanion"
 BUNDLE="${APP}.app"
-VERSION="0.16.0"
-BUILD_VERSION="23"
+VERSION="0.16.1"
+BUILD_VERSION="24"
 BUNDLE_ID="com.hyeonseswing.YTMusicCompanion"
 DISPLAY_NAME="YT Music Companion"
 MINIMUM_SYSTEM_VERSION="13.0"
 ARCHITECTURES=(arm64 x86_64)
 DISCORD_CLIENT_ID="${DISCORD_CLIENT_ID:-}"
+# Forward explicit SwiftPM flags (for example a writable cache path in CI).
+SWIFT_BUILD_ARGUMENTS=("$@")
 
 verify_architectures() {
     local path="$1"
@@ -62,10 +64,11 @@ for architecture in "${ARCHITECTURES[@]}"; do
 done
 
 echo "==> Compiling Universal release (${ARCHITECTURES[*]})..."
-swift build -c release "${SWIFT_ARCHITECTURE_ARGUMENTS[@]}"
+swift build -c release "${SWIFT_ARCHITECTURE_ARGUMENTS[@]}" "${SWIFT_BUILD_ARGUMENTS[@]}"
 BIN_DIR="$(
     swift build -c release \
         "${SWIFT_ARCHITECTURE_ARGUMENTS[@]}" \
+        "${SWIFT_BUILD_ARGUMENTS[@]}" \
         --show-bin-path
 )"
 BIN="${BIN_DIR}/${APP}"

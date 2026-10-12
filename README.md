@@ -38,6 +38,11 @@ video starts. Quitting Companion or closing the music app releases this preferen
 Track metadata is queried directly from the YouTube Music client, independently
 of the system's selected player. No playback command is sent when assigning priority.
 
+When several media clients are registered, Companion checks all installed YouTube
+Music candidates and prefers a complete, actively playing response. An empty first
+candidate does not hide another valid player. Artwork uses the same YouTube Music selection
+instead of the system's currently selected video or other audio source.
+
 This uses dynamically resolved private MediaRemote APIs. If an API is unavailable,
 the app still launches and falls back to the existing metadata query; priority is
 not guaranteed on an untested macOS version. Hardware headset behavior must be
@@ -136,6 +141,7 @@ Discord must have activity sharing enabled. If no client ID is supplied, the lyr
 
 ```sh
 ./scripts/build-artwork-bridge.sh
+./scripts/test-artwork-bridge.sh
 swift build
 swift test
 DISCORD_CLIENT_ID=your_application_id swift run
@@ -156,7 +162,8 @@ DISCORD_CLIENT_ID=your_application_id .build/debug/YTMusicCompanion --discord
 
 ## Architecture
 
-- `NowPlaying.swift`: reads macOS MediaRemote state through an `osascript` JXA bridge.
+- `NowPlaying.swift`: reads the installed YouTube Music client's MediaRemote state
+  through the native bridge hosted by Apple's Perl, with a source-filtered JXA fallback.
 - `NowPlayingArtwork.swift`: requests the actual cover once per track, keeps it in
   memory, and verifies any public Discord artwork URL against those pixels.
 - `YouTubeMusicSource.swift`: accepts only the installed YouTube Music web app.

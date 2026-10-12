@@ -118,32 +118,49 @@ enum MediaRemoteBridge {
     }
 
     static func query(cancellation: CancellationToken) -> NowPlaying? {
-        if let helpers = MediaRemoteArtworkBridge.helperPaths(),
-           let result = SubprocessRunner.run(
-               executable: "/usr/bin/perl",
-               arguments: [helpers.script.path, helpers.library.path, "YTMCPrintYouTubeMusicNowPlaying"],
-               timeout: 5,
-               cancellation: cancellation
-           ), result.succeeded,
-           let json = try? JSONSerialization.jsonObject(with: result.output) as? [String: Any],
-           json["error"] == nil {
-            return decode(json)
+        query(cancellation: cancellation, preferredQuery: {
+            guard let helpers = MediaRemoteArtworkBridge.helperPaths(),
+                  let result = SubprocessRunner.run(
+                      executable: "/usr/bin/perl",
+                      arguments: [helpers.script.path, helpers.library.path, "YTMCPrintYouTubeMusicNowPlaying"],
+                      timeout: 5,
+                      cancellation: cancellation
+                  ), result.succeeded else { return nil }
+            return try? JSONSerialization.jsonObject(with: result.output) as? [String: Any]
+        }, fallbackQuery: {
+            // Older OS/frameworks and development builds without the helper retain
+            // the original source-filtered query.
+            guard let result = SubprocessRunner.run(
+                executable: "/usr/bin/osascript",
+                arguments: ["-l", "JavaScript", "-e", jxa],
+                timeout: 5,
+                cancellation: cancellation
+            ), result.succeeded else { return nil }
+            return try? JSONSerialization.jsonObject(with: result.output) as? [String: Any]
+        })
+    }
+
+    /// A successful subprocess can still contain an empty/stale client snapshot.
+    /// Only a complete YouTube Music sample may stop the fallback or reach callers.
+    static func query(
+        cancellation: CancellationToken,
+        preferredQuery: () -> [String: Any]?,
+        fallbackQuery: () -> [String: Any]?
+    ) -> NowPlaying? {
+        guard !cancellation.isCancelled else { return nil }
+        if let snapshot = preferredQuery().flatMap(validMusicSnapshot), !cancellation.isCancelled {
+            return snapshot
         }
         guard !cancellation.isCancelled else { return nil }
-        // Older OS/frameworks and development builds without the helper retain
-        // the original source-filtered query.
-        guard let result = SubprocessRunner.run(
-            executable: "/usr/bin/osascript",
-            arguments: ["-l", "JavaScript", "-e", jxa],
-            timeout: 5,
-            cancellation: cancellation
-        ), result.succeeded else { return nil }
-        guard
-            let json = try? JSONSerialization.jsonObject(with: result.output) as? [String: Any],
-            json["error"] == nil
-        else { return nil }
+        let snapshot = fallbackQuery().flatMap(validMusicSnapshot)
+        return cancellation.isCancelled ? nil : snapshot
+    }
 
-        return decode(json)
+    private static func validMusicSnapshot(_ json: [String: Any]) -> NowPlaying? {
+        guard let snapshot = decode(json), snapshot.isValid,
+              YouTubeMusicSource.matches(bundle: snapshot.sourceBundle, pid: snapshot.sourcePID)
+        else { return nil }
+        return snapshot
     }
 
     static func decode(_ json: [String: Any]) -> NowPlaying? {
@@ -156,6 +173,14 @@ enum MediaRemoteBridge {
         // converting.
         let pidValue = num("SourcePID")
         let sourcePID: Int32 = (pidValue >= 0 && pidValue < 2_147_483_647) ? Int32(pidValue) : 0
+        let parentBundle = str("ParentBundle")
+        let bundle = str("Bundle")
+        // Chromium versions differ in which identity carries the installed PWA.
+        // A generic browser parent must not hide a verified music client bundle.
+        let sourceBundle = YouTubeMusicSource.matches(bundle: parentBundle, pid: sourcePID)
+            ? parentBundle
+            : (YouTubeMusicSource.matches(bundle: bundle, pid: sourcePID)
+                ? bundle : (parentBundle.isEmpty ? bundle : parentBundle))
 
         return NowPlaying(
             title: str("Title"),
@@ -166,7 +191,7 @@ enum MediaRemoteBridge {
             timestamp: num("Timestamp"),
             isPlaying: (json["isPlaying"] as? Bool) ?? false,
             rate: num("PlaybackRate"),
-            sourceBundle: str("ParentBundle").isEmpty ? str("Bundle") : str("ParentBundle"),
+            sourceBundle: sourceBundle,
             sourcePID: sourcePID
         )
     }
