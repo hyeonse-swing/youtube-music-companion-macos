@@ -56,7 +56,7 @@ final class PlayerModel: ObservableObject {
     }
 
     /// User-facing switch from the menubar: when false we stop publishing Discord
-    /// Rich Presence and clear any existing one. Default ON. (Independent of the
+    /// Rich Presence and clear any existing one. Default OFF. (Independent of the
     /// overlay — Discord is a parallel consumer of the now-playing engine.)
     @Published var discordEnabled: Bool {
         didSet {
@@ -369,7 +369,7 @@ final class PlayerModel: ObservableObject {
         self.defaults = defaults
         self.preferences = preferences
         overlayEnabled = defaults.object(forKey: Self.overlayEnabledKey) as? Bool ?? true
-        discordEnabled = defaults.object(forKey: Self.discordEnabledKey) as? Bool ?? true
+        discordEnabled = defaults.object(forKey: Self.discordEnabledKey) as? Bool ?? false
         lyricsFontSize = preferences.lyricsFontSize
         overlayPreset = preferences.overlayPreset
         karaokeModeEnabled = preferences.karaokeModeEnabled

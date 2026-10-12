@@ -6,8 +6,8 @@ cd "$(dirname "$0")/.."
 
 APP="YTMusicCompanion"
 BUNDLE="${APP}.app"
-VERSION="0.16.1"
-BUILD_VERSION="24"
+VERSION="0.16.2"
+BUILD_VERSION="25"
 BUNDLE_ID="com.hyeonseswing.YTMusicCompanion"
 DISPLAY_NAME="YT Music Companion"
 MINIMUM_SYSTEM_VERSION="13.0"
@@ -15,6 +15,11 @@ ARCHITECTURES=(arm64 x86_64)
 DISCORD_CLIENT_ID="${DISCORD_CLIENT_ID:-}"
 # Forward explicit SwiftPM flags (for example a writable cache path in CI).
 SWIFT_BUILD_ARGUMENTS=("$@")
+# Keep developer checkout paths out of distributed binaries and debug records.
+SWIFT_BUILD_ARGUMENTS+=(
+    -Xswiftc -file-prefix-map -Xswiftc "${PWD}=."
+    -Xswiftc -debug-prefix-map -Xswiftc "${PWD}=."
+)
 
 verify_architectures() {
     local path="$1"
@@ -88,6 +93,9 @@ echo "==> Assembling ${BUNDLE}..."
 rm -rf "${BUNDLE}"
 mkdir -p "${BUNDLE}/Contents/MacOS" "${BUNDLE}/Contents/Resources"
 cp "${BIN}" "${BUNDLE}/Contents/MacOS/${APP}"
+# Mach-O debug-map entries can retain absolute object-file paths after prefix
+# mapping. The downloadable app does not ship debugging symbols.
+strip -S "${BUNDLE}/Contents/MacOS/${APP}"
 cp "${BRIDGE}" "${BUNDLE}/Contents/Resources/"
 cp "Support/ArtworkBridge/artwork-bridge.pl" "${BUNDLE}/Contents/Resources/"
 

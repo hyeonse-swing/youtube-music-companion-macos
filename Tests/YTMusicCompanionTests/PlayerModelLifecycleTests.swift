@@ -4,6 +4,54 @@ import Combine
 
 @MainActor
 final class PlayerModelLifecycleTests: XCTestCase {
+    func testDiscordPresenceIsDisabledWhenNoPreferenceIsSaved() {
+        let suiteName = "PlayerModelDiscordDefaultTests.\(UUID().uuidString)"
+        let defaults = UserDefaults(suiteName: suiteName)!
+        defer { defaults.removePersistentDomain(forName: suiteName) }
+
+        let model = PlayerModel(
+            presenceController: DiscordPresenceController(
+                publisher: LifecyclePresencePublisher()
+            ),
+            defaults: defaults
+        )
+
+        XCTAssertFalse(model.discordEnabled)
+        XCTAssertNil(defaults.object(forKey: "discordEnabled"))
+    }
+
+    func testDiscordPresenceUsesSavedEnabledPreference() {
+        let suiteName = "PlayerModelDiscordEnabledTests.\(UUID().uuidString)"
+        let defaults = UserDefaults(suiteName: suiteName)!
+        defer { defaults.removePersistentDomain(forName: suiteName) }
+        defaults.set(true, forKey: "discordEnabled")
+
+        let model = PlayerModel(
+            presenceController: DiscordPresenceController(
+                publisher: LifecyclePresencePublisher()
+            ),
+            defaults: defaults
+        )
+
+        XCTAssertTrue(model.discordEnabled)
+    }
+
+    func testDiscordPresenceUsesSavedDisabledPreference() {
+        let suiteName = "PlayerModelDiscordDisabledTests.\(UUID().uuidString)"
+        let defaults = UserDefaults(suiteName: suiteName)!
+        defer { defaults.removePersistentDomain(forName: suiteName) }
+        defaults.set(false, forKey: "discordEnabled")
+
+        let model = PlayerModel(
+            presenceController: DiscordPresenceController(
+                publisher: LifecyclePresencePublisher()
+            ),
+            defaults: defaults
+        )
+
+        XCTAssertFalse(model.discordEnabled)
+    }
+
     func testStartIsIdempotentAndStopCancelsTheActivePoll() {
         let started = expectation(description: "poll started")
         let cancelled = expectation(description: "poll cancelled")
@@ -226,6 +274,7 @@ final class PlayerModelLifecycleTests: XCTestCase {
         let suiteName = "PlayerModelManualPresenceTests.\(UUID().uuidString)"
         let defaults = UserDefaults(suiteName: suiteName)!
         defer { defaults.removePersistentDomain(forName: suiteName) }
+        defaults.set(true, forKey: "discordEnabled")
         let publisher = RecordingLifecyclePresencePublisher()
         let model = PlayerModel(
             presenceController: DiscordPresenceController(publisher: publisher),

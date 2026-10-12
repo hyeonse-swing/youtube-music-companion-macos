@@ -3,4 +3,4 @@
 *.xcodeproj
 .swiftpm/
 YTMusicCompanion.app/
-.claude/settings.local.json
+.claude/

@@ -4,8 +4,8 @@ A focused macOS menu-bar app for the installed YouTube Music web app. It:
 
 - Shows synchronized lyrics in a transparent, click-through overlay.
 - Shows the exact YouTube Music cover supplied to macOS in the Now Playing panel.
-- Publishes the current track, visually verified artwork, progress, and an exact
-  YouTube Music song link to Discord Rich Presence.
+- Optionally publishes the current track, visually verified artwork, progress,
+  and an exact YouTube Music song link to Discord Rich Presence.
 - Uses the exact title, artist, and album rendered in YouTube Music's player bar,
   including bilingual labels such as `鋼の羽根 - Iron Feather`.
 - Shows the current track and playback progress in a native **Now Playing** panel.
@@ -135,7 +135,38 @@ DISCORD_CLIENT_ID=your_application_id ./scripts/install.sh
 open -a YTMusicCompanion
 ```
 
-Discord must have activity sharing enabled. If no client ID is supplied, the lyrics overlay still works and the Discord menu item is disabled.
+Discord sharing is **off by default** on a new installation. Enable it in the app
+only when you want to publish your listening activity; existing saved choices are
+preserved during updates. Discord must also have activity sharing enabled. If no
+client ID is supplied, the lyrics overlay still works and the Discord menu item is
+disabled. An Application ID is public; never put a bot token or client secret in it.
+
+## Privacy and security
+
+- Playback metadata and artwork are read locally from the installed YouTube Music
+  app. Optional Accessibility access reads its visible player-bar labels and song
+  URL. The app does not require your Google password or browser cookies.
+- Online lyric lookup sends song metadata, such as title, artist, album, and
+  duration, to LRCLIB. Discord artwork matching searches Apple's iTunes catalog
+  and downloads candidate covers. Those services receive ordinary network requests,
+  including your IP address; disabling Discord does not disable online lyrics.
+- When enabled, Discord sharing sends the configured song fields, progress, links,
+  and public artwork URL to the local Discord desktop client. Discord controls who
+  can see the resulting activity. Manual presence publishes the content you enter.
+- Preferences, song choices, imported lyrics, and lyric/translation caches stay on
+  this Mac. Diagnostics can clear downloaded lyrics; imported files are retained.
+  Translation uses Apple's on-device framework, which may download language packs.
+- There is no project-operated backend, analytics, or crash-reporting service.
+  Please remove song details, local paths, and other personal information before
+  sharing diagnostic output in a public issue.
+
+The MediaRemote bridge uses private Apple APIs and the app requests powerful
+Accessibility permission for exact metadata. Review the source before granting
+access. Public release archives are currently **ad-hoc signed and not notarized**;
+macOS may block them on another Mac. Do not disable Gatekeeper system-wide.
+The MIT license covers the app's code, not music, lyrics, artwork, or third-party
+service content. This is an independent project, unaffiliated with YouTube, Google,
+Apple, or Discord.
 
 ## Development
 
