@@ -21,6 +21,21 @@ final class LyricsTests: XCTestCase {
         XCTAssertEqual(Set(lines.map(\.text)), ["yo"])
     }
 
+    func testStripsEnhancedLRCWordTimestampsFromDisplayedText() {
+        let lines = LRCLIB.parseLRC("[00:12.00]<00:12.00>Hello <00:12.45>world")
+        XCTAssertEqual(lines, [LyricLine(time: 12, text: "Hello world")])
+    }
+
+    func testEnhancedLRCKeepsLineTimingAndUnrelatedAngleBrackets() {
+        let raw = "[ar:Artist]\r\n[00:05.00][00:35.00]<00:05.00>안녕 <00:05.65>world\r\n[00:40.00]<note> <00:40.25>again"
+        let lines = LRCLIB.parseLRC(raw)
+        XCTAssertEqual(lines, [
+            LyricLine(time: 5, text: "안녕 world"),
+            LyricLine(time: 35, text: "안녕 world"),
+            LyricLine(time: 40, text: "<note> again"),
+        ])
+    }
+
     func testSortsByTime() {
         let lines = LRCLIB.parseLRC("[00:30.00] late\n[00:05.00] early")
         XCTAssertEqual(lines.map(\.text), ["early", "late"])

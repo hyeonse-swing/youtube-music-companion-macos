@@ -3,6 +3,7 @@
 A focused macOS menu-bar app for the installed YouTube Music web app. It:
 
 - Shows synchronized lyrics in a transparent, click-through overlay.
+- Displays enhanced LRC word-timed files without showing their timing tags in the lyric text.
 - Shows the exact YouTube Music cover supplied to macOS in the Now Playing panel.
 - Optionally publishes the current track, visually verified artwork, progress,
   and an exact YouTube Music song link to Discord Rich Presence.

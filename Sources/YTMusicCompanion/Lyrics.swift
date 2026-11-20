@@ -470,20 +470,28 @@ enum LRCLIB {
 
     /// `[mm:ss.xx]` timestamp tag. Compiled once, reused across every parse.
     private static let tagRegex = try! NSRegularExpression(pattern: #"\[(\d+):(\d{2}(?:\.\d+)?)\]"#)
+    /// Enhanced LRC uses these tags for individual words. The overlay renders
+    /// line timing, so the tags must not appear in the lyric text.
+    private static let wordTagRegex = try! NSRegularExpression(pattern: #"<\d+:\d{2}(?:\.\d+)?>"#)
 
     /// Parses `[mm:ss.xx] text` lines (a line can carry multiple timestamps).
     static func parseLRC(_ raw: String) -> [LyricLine] {
         let tag = tagRegex
         var out: [LyricLine] = []
 
-        for rawLine in raw.split(separator: "\n", omittingEmptySubsequences: false) {
-            let line = String(rawLine)
+        for line in raw.components(separatedBy: .newlines) {
             let ns = line as NSString
             let matches = tag.matches(in: line, range: NSRange(location: 0, length: ns.length))
             guard let last = matches.last else { continue }
 
-            let text = ns
+            let rawText = ns
                 .substring(from: last.range.location + last.range.length)
+            let text = wordTagRegex
+                .stringByReplacingMatches(
+                    in: rawText,
+                    range: NSRange(location: 0, length: (rawText as NSString).length),
+                    withTemplate: ""
+                )
                 .trimmingCharacters(in: .whitespaces)
 
             for m in matches {
