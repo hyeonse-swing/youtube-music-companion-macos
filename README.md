@@ -55,7 +55,10 @@ version, build number, Discord configuration status, bundle identifier, and proj
 
 ## Menu and overlay controls
 
-- **Show Now Playing…** opens the current-track panel.
+- **Show Now Playing…** opens the current-track panel. Choose **Pin to Side** or use
+  **Show Mini Player…** from the menu bar for a floating card with artwork, title,
+  artist, and playback progress. Drag it to your preferred position. **Expand Player**
+  restores the full panel, and closing the card leaves playback running.
 - **Enable Exact YouTube Music Metadata…** opens Accessibility settings when the
   required permission has not been granted yet.
 - Drag the current lyric line to move the overlay. Its position is restored at the
@@ -118,13 +121,36 @@ from the menu-bar menu, then enable YT Music Companion in Accessibility settings
 
 ### Install YouTube Music as an app
 
-1. Open <https://music.youtube.com> in Chrome, Brave, or Edge.
-2. Use the install icon in the address bar, or choose **Install YouTube Music** from the browser menu.
-3. Play music from the installed app, not a regular browser tab.
+On first launch, Companion opens its setup guide if it cannot find the installed
+player. Reopen it at any time from **Set Up YouTube Music…** in the menu bar or
+from **Settings → General**.
 
-This distinction is required because macOS reports only the generic browser bundle for normal tabs.
+1. Choose an installed Chrome, Edge, or Brave browser in the guide and open YouTube
+   Music. If none is installed, the guide links to the official Chrome download.
+2. Confirm the web app installation in the browser. In Chrome, use the install
+   icon in the address bar or **Cast, save, and share → Install page as app**.
+3. The guide detects the installed player automatically. Choose **Open app** and play a song in that window. A regular browser tab does not provide
+   the separate player identity that macOS needs.
+
+See Google's [YouTube Music desktop guide](https://support.google.com/youtubemusic/answer/9231765)
+and [Chrome web app instructions](https://support.google.com/chrome/answer/9658361).
 
 ## Discord setup
+
+When the installed app already has an Application ID, enable Discord sharing in
+Companion and turn on activity sharing in Discord. In **Settings → Discord → Live**,
+choose **Member list status** to show the card's title, artist/status, or application
+name, then apply the settings. The preview follows your template and preset.
+Discord controls where the activity appears and who can see it. A friend can open
+the track in YouTube Music when the card includes its verified song link.
+
+The floating mini player is available on macOS independently of Discord. Discord
+documents the in-game overlay for Windows and synchronized Listen Along for its
+Spotify account connection. See [Discord activity privacy](https://support.discord.com/hc/en-us/articles/7931156448919-Activity-Sharing-on-Discord-FAQ),
+[Game Overlay](https://support.discord.com/hc/en-us/articles/217659737-Game-Overlay-101), and
+[Discord’s Spotify connection](https://support.discord.com/hc/en-us/articles/360000167212-Discord-Spotify-Connection).
+
+To configure your own source build:
 
 1. Create an application in the [Discord Developer Portal](https://discord.com/developers/applications).
 2. Copy its **Application ID**. This public identifier is the Discord client ID.
@@ -188,6 +214,11 @@ Useful probes:
 .build/debug/YTMusicCompanion --metadata "Kenshi Yonezu" "Shunrai" 289
 .build/debug/YTMusicCompanion --probe "Artist" "Title" 200
 .build/debug/YTMusicCompanion --art "Artist" "Title"
+.build/debug/YTMusicCompanion --check-player-setup
+.build/debug/YTMusicCompanion --show-player-setup
+.build/debug/YTMusicCompanion --show-mini-player
+DISCORD_CLIENT_ID=your_application_id .build/debug/YTMusicCompanion --check-discord-connection
+# Publishes “Companion Test” on the signed-in Discord profile for 12 seconds, then clears it.
 DISCORD_CLIENT_ID=your_application_id .build/debug/YTMusicCompanion --discord
 .build/debug/YTMusicCompanion --check-resources
 ```

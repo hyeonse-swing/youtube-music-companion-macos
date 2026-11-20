@@ -76,6 +76,24 @@ enum DiscordPresencePreset: String, CaseIterable, Identifiable {
     }
 }
 
+/// Discord's status_display_type selects the line shown in member lists.
+/// Activity details and state continue to appear in the expanded profile.
+enum DiscordStatusDisplayType: Int, CaseIterable, Identifiable {
+    case name = 0
+    case state = 1
+    case details = 2
+
+    var id: Int { rawValue }
+
+    var displayName: String {
+        switch self {
+        case .name: "Application name"
+        case .state: "Artist / status line"
+        case .details: "Details line"
+        }
+    }
+}
+
 enum DiscordPausePolicy: String, CaseIterable, Identifiable {
     case hideImmediately
     case keepForFiveMinutes

@@ -58,6 +58,15 @@ final class DiscordPresenceConfigurationTests: XCTestCase {
         XCTAssertEqual(content.imageText, track.album)
     }
 
+    func testMemberListStatusDefaultsToTheSongTitle() {
+        let configuration = DiscordPresenceConfiguration.standard
+        XCTAssertEqual(configuration.statusDisplayType, .details)
+        XCTAssertTrue(configuration.linksDetailsToSong)
+        var byArtist = configuration
+        byArtist.statusDisplayType = .state
+        XCTAssertNotEqual(configuration.publicationKey, byArtist.publicationKey)
+    }
+
     func testLivePresetsApplyDistinctContentAndVisibilityRules() {
         let titleFocused = DiscordPresencePreset.titleFocused.applying(
             to: .standard

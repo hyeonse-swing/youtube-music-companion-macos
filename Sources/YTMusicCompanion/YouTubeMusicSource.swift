@@ -8,7 +8,7 @@ enum YouTubeMusicSource {
     static let discordAssetKey = "youtube-music"
     static let displayName = "YouTube Music"
 
-    private static let extensionID = "cinhimbnkkaeohfgghhklpknlkffjgod"
+    static let webAppID = "cinhimbnkkaeohfgghhklpknlkffjgod"
     private static let legacyLoaderBundle = "app_mode_loader"
     private static let cacheTTL: TimeInterval = 30
 
@@ -23,7 +23,7 @@ enum YouTubeMusicSource {
     )
 
     static func matches(bundle: String, pid: Int32) -> Bool {
-        if bundle.hasSuffix(".\(extensionID)") {
+        if bundle.hasSuffix(".\(webAppID)") {
             return true
         }
 

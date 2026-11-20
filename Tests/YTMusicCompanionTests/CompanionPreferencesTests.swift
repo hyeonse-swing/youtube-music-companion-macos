@@ -81,6 +81,7 @@ final class CompanionPreferencesTests: XCTestCase {
             showsPlaybackTime: false,
             showsSongLink: false
         )
+        customized.statusDisplayType = .state
         customized.preset = .custom
         customized.pausePolicy = .keepForFifteenMinutes
         customized.linksDetailsToSong = true

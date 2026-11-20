@@ -162,15 +162,12 @@ final class DiscordPresenceController {
         let start = configuration.showsPlaybackTime
             ? Date(timeIntervalSince1970: startEpoch)
             : nil
-        let title = track.artist.isEmpty
-            ? track.title
-            : "\(track.title) - \(track.artist)"
         let image = artworkURL ?? YouTubeMusicSource.discordAssetKey
         let content = configuration.content(for: track)
         let links = configuration.links(for: track)
 
         return PresenceActivity(
-            name: title,
+            name: YouTubeMusicSource.displayName,
             details: content.details,
             state: content.state,
             start: start,
@@ -183,7 +180,8 @@ final class DiscordPresenceController {
             stateURL: links.stateURL,
             largeImageURL: links.coverURL,
             smallImageURL: nil,
-            buttons: links.buttons
+            buttons: links.buttons,
+            statusDisplayType: configuration.statusDisplayType
         )
     }
 

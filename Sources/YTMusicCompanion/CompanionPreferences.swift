@@ -62,6 +62,7 @@ struct CompanionPreferences {
     private static let discordImageTextTemplateKey = "discordImageTextTemplate"
     private static let discordShowsPlaybackTimeKey = "discordShowsPlaybackTime"
     private static let discordShowsSongLinkKey = "discordShowsSongLink"
+    private static let discordStatusDisplayTypeKey = "discordStatusDisplayType"
     private static let discordPresetKey = "discordPreset"
     private static let discordPausePolicyKey = "discordPausePolicy"
     private static let discordLinksDetailsToSongKey = "discordLinksDetailsToSong"
@@ -163,6 +164,7 @@ struct CompanionPreferences {
                 discordPresenceConfiguration.showsSongLink,
                 forKey: Self.discordShowsSongLinkKey
             )
+            defaults.set(discordPresenceConfiguration.statusDisplayType.rawValue, forKey: Self.discordStatusDisplayTypeKey)
             defaults.set(
                 discordPresenceConfiguration.preset.rawValue,
                 forKey: Self.discordPresetKey
@@ -240,6 +242,8 @@ struct CompanionPreferences {
                 ?? standardPresence.showsPlaybackTime,
             showsSongLink: defaults.object(forKey: Self.discordShowsSongLinkKey) as? Bool
                 ?? standardPresence.showsSongLink,
+            statusDisplayType: (defaults.object(forKey: Self.discordStatusDisplayTypeKey) as? Int)
+                .flatMap(DiscordStatusDisplayType.init(rawValue:)) ?? standardPresence.statusDisplayType,
             preset: DiscordPresencePreset(
                 rawValue: defaults.string(forKey: Self.discordPresetKey) ?? ""
             ) ?? standardPresence.preset,
@@ -315,6 +319,7 @@ struct CompanionPreferences {
             Self.discordImageTextTemplateKey,
             Self.discordShowsPlaybackTimeKey,
             Self.discordShowsSongLinkKey,
+            Self.discordStatusDisplayTypeKey,
             Self.discordPresetKey,
             Self.discordPausePolicyKey,
             Self.discordLinksDetailsToSongKey,

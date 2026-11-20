@@ -17,7 +17,7 @@ struct DiscordPresenceConfiguration: Equatable {
         showsSongLink: true,
         preset: .originalFirst,
         pausePolicy: .hideImmediately,
-        linksDetailsToSong: false,
+        linksDetailsToSong: true,
         linksStateToSong: false,
         linksCoverToSong: true,
         primaryButtonLabel: "Listen on YouTube Music",
@@ -32,9 +32,10 @@ struct DiscordPresenceConfiguration: Equatable {
     var imageTextTemplate: String
     var showsPlaybackTime: Bool
     var showsSongLink: Bool = true
+    var statusDisplayType: DiscordStatusDisplayType = .details
     var preset: DiscordPresencePreset = .originalFirst
     var pausePolicy: DiscordPausePolicy = .hideImmediately
-    var linksDetailsToSong = false
+    var linksDetailsToSong = true
     var linksStateToSong = false
     var linksCoverToSong = true
     var primaryButtonLabel = "Listen on YouTube Music"
@@ -60,6 +61,7 @@ struct DiscordPresenceConfiguration: Equatable {
             imageTextTemplate,
             showsPlaybackTime ? "time" : "no-time",
             showsSongLink ? "link" : "no-link",
+            String(statusDisplayType.rawValue),
             preset.rawValue,
             pausePolicy.rawValue,
             linksDetailsToSong ? "details-link" : "no-details-link",

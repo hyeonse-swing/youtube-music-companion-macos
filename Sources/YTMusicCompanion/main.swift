@@ -104,9 +104,24 @@ final class AppDelegate: NSObject, NSApplicationDelegate {
         menuBar = MenuBar(model: model) { [weak self] in
             self?.resetOverlayPosition()
         }
+        model.$appLanguage.removeDuplicates().dropFirst()
+            .sink { [weak self] language in self?.menuBar?.updateSetupLanguage(language) }
+            .store(in: &cancellables)
         translationHostWindow = TranslationHostWindowController(model: model)
 
         model.start()
+
+        let arguments = CommandLine.arguments
+        if arguments.contains("--show-player-setup") {
+            menuBar?.openSetup()
+        } else if arguments.contains("--show-mini-player") {
+            menuBar?.showNowPlayingPanel(compact: true)
+        } else if !arguments.contains(where: { $0.hasPrefix("--show-") })
+                    && !UserDefaults.standard.bool(forKey: "didOfferPlayerSetup")
+                    && YouTubeMusicSetup.discover().isEmpty {
+            UserDefaults.standard.set(true, forKey: "didOfferPlayerSetup")
+            menuBar?.openSetup()
+        }
 
         // QA helper for a menu-bar agent whose status item is otherwise difficult to
         // drive in automated UI checks: launch with `--show-about` to open the same
@@ -399,17 +414,21 @@ if CommandLine.arguments.contains("--art") {
     }
 }
 
-// Debug: `YTMusicCompanion --discord` → connect, send a test activity, hold ~3s so you
-// can eyeball Discord, then clear + exit. End-to-end IPC check.
-if CommandLine.arguments.contains("--discord") {
+// The connection probe only handshakes. The explicit publication probe temporarily
+// shows synthetic metadata and checks Discord’s acknowledgement of its removal.
+let checkDiscordConnection = CommandLine.arguments.contains("--check-discord-connection")
+if checkDiscordConnection || CommandLine.arguments.contains("--discord") {
     guard let clientID = AppConfiguration.discordClientID else {
         print("Discord client ID is not configured")
         exit(2)
     }
-    let rpc = DiscordRPC(clientID: clientID)
+    let rpc = DiscordRPC(clientID: clientID, requiresAcknowledgement: true)
     let group = DispatchGroup()
     group.enter()
+    var handshakeReady = false
+    var activityAccepted = false
     rpc.connect { found, ready in
+        handshakeReady = ready
         print("socket found: \(found)")
         print("READY received: \(ready)")
         guard found, ready else {
@@ -417,29 +436,52 @@ if CommandLine.arguments.contains("--discord") {
             group.leave()
             return
         }
+        if checkDiscordConnection {
+            group.leave()
+            return
+        }
         let now = Date()
         rpc.setActivity(.init(
-            name: "Test Title - Test Artist",
-            details: "Test Title",
-            state: "Test Artist",
+            name: YouTubeMusicSource.displayName,
+            details: "Companion Test",
+            state: "Companion QA",
             start: now,
             end: now.addingTimeInterval(180),
             largeImage: YouTubeMusicSource.discordAssetKey,
-            largeImageText: "Test Album",
+            largeImageText: "Connection check",
             smallImage: YouTubeMusicSource.discordAssetKey,
-            smallImageText: YouTubeMusicSource.displayName
+            smallImageText: YouTubeMusicSource.displayName,
+            statusDisplayType: .details
         )) { sent in
-            print("activity sent: \(sent)")
+            activityAccepted = sent
+            print("activity acknowledged: \(sent)")
+            fflush(stdout)
             group.leave()
         }
     }
     group.wait()
-    // Hold briefly so the presence is visible in Discord, then clear and exit.
-    Thread.sleep(forTimeInterval: 3)
-    rpc.clear()
-    Thread.sleep(forTimeInterval: 0.3)   // let the clear flush before we exit
+    if checkDiscordConnection || !handshakeReady {
+        rpc.disconnect()
+        exit(handshakeReady ? 0 : 1)
+    }
+    if activityAccepted { Thread.sleep(forTimeInterval: 12) }
+    // Also clear after a timed-out write. Discord may have applied the activity.
+    var clearAccepted = false
+    group.enter()
+    rpc.clear { accepted in
+        clearAccepted = accepted
+        print("clear acknowledged: \(accepted)")
+        group.leave()
+    }
+    group.wait()
     rpc.disconnect()
-    exit(0)
+    exit(activityAccepted && clearAccepted ? 0 : 1)
+}
+
+if CommandLine.arguments.contains("--check-player-setup") {
+    let installed = MainActor.assumeIsolated { !YouTubeMusicSetup.discover().isEmpty }
+    print(installed ? "YouTube Music web app detected" : "YouTube Music web app not detected")
+    exit(installed ? 0 : 1)
 }
 
 MainActor.assumeIsolated {

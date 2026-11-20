@@ -22,6 +22,7 @@ struct PresenceActivity: Equatable {
     var largeImageURL: URL? = nil
     var smallImageURL: URL? = nil
     var buttons: [PresenceButton] = []
+    var statusDisplayType: DiscordStatusDisplayType = .name
 }
 
 protocol PresencePublishing: AnyObject {
@@ -61,6 +62,8 @@ extension PresencePublishing {
 /// is a quiet no-op until the next attempt.
 final class DiscordRPC: PresencePublishing {
     private let clientID: String?
+    private let requiresAcknowledgement: Bool
+    private let socketPathsOverride: [String]?
 
     /// Activity type 2 makes Discord render this as a listening activity.
     /// (0 = Playing, 1 = Streaming, 2 = Listening, 3 = Watching.)
@@ -79,6 +82,7 @@ final class DiscordRPC: PresencePublishing {
     private let statusLock = NSLock()
     private var fd: Int32 = -1
     private var isConnected = false
+    private var statusDisplayTypeRejected = false
     private var storedConnectionStatus: DiscordConnectionStatus
     private var connectionStatusHandler: (@Sendable (DiscordConnectionStatus) -> Void)?
 
@@ -87,8 +91,14 @@ final class DiscordRPC: PresencePublishing {
         statusLock.withLock { storedConnectionStatus }
     }
 
-    init(clientID: String?) {
+    init(
+        clientID: String?,
+        requiresAcknowledgement: Bool = false,
+        socketPaths: [String]? = nil
+    ) {
         self.clientID = clientID
+        self.requiresAcknowledgement = requiresAcknowledgement
+        socketPathsOverride = socketPaths
         storedConnectionStatus = clientID == nil ? .notConfigured : .disconnected
     }
 
@@ -144,10 +154,20 @@ final class DiscordRPC: PresencePublishing {
 
     /// Clear the presence (send `activity: null`). No-op when not connected.
     func clear() {
+        clear(completion: nil)
+    }
+
+    /// Reports whether the clear command was accepted by the connected client.
+    /// Used by the one-shot Discord probe to confirm its test activity was removed.
+    func clear(completion: ((Bool) -> Void)?) {
         queue.async {
-            guard self.isConnected else { return }
+            guard self.isConnected else {
+                completion?(false)
+                return
+            }
             let cleared = self.sendActivityLocked(nil)
             self.updateConnectionStatusLocked(cleared ? .connected : .retrying)
+            completion?(cleared)
         }
     }
 
@@ -166,6 +186,7 @@ final class DiscordRPC: PresencePublishing {
     private struct ActivityPayload: Encodable {
         let type: Int
         let name: String
+        let statusDisplayType: Int?
         let details: String
         let state: String
         let detailsURL: String?
@@ -180,6 +201,7 @@ final class DiscordRPC: PresencePublishing {
         enum CodingKeys: String, CodingKey {
             case type
             case name
+            case statusDisplayType = "status_display_type"
             case details
             case state
             case detailsURL = "details_url"
@@ -223,8 +245,23 @@ final class DiscordRPC: PresencePublishing {
 
     private struct SetActivityArgs: Encodable {
         let pid: Int32
-        // nil → encodes as `"activity": null`, which clears the presence.
+        // A clear must send an explicit null; synthesized Optional encoding
+        // would omit the key entirely.
         let activity: ActivityPayload?
+
+        enum CodingKeys: String, CodingKey {
+            case pid, activity
+        }
+
+        func encode(to encoder: Encoder) throws {
+            var container = encoder.container(keyedBy: CodingKeys.self)
+            try container.encode(pid, forKey: .pid)
+            if let activity {
+                try container.encode(activity, forKey: .activity)
+            } else {
+                try container.encodeNil(forKey: .activity)
+            }
+        }
     }
 
     private struct SetActivityCommand: Encodable {
@@ -252,7 +289,7 @@ final class DiscordRPC: PresencePublishing {
     private func connectLocked() -> (Bool, Bool) {
         guard let clientID else { return (false, false) }
         var socketFound = false
-        for path in Self.socketPaths()
+        for path in socketPathsOverride ?? Self.socketPaths()
         where FileManager.default.fileExists(atPath: path) {
             socketFound = true
             if connectLocked(path: path, clientID: clientID) {
@@ -342,6 +379,7 @@ final class DiscordRPC: PresencePublishing {
             disconnectLocked()
             return false
         }
+        statusDisplayTypeRejected = false
         return true
     }
 
@@ -404,21 +442,56 @@ final class DiscordRPC: PresencePublishing {
         return try? JSONEncoder().encode(command)
     }
 
-    /// Build + send a SET_ACTIVITY frame. Pass nil to clear. On any write/read error
-    /// we mark disconnected so the next update retries the whole connection.
+    /// Build + send a SET_ACTIVITY frame. A client that rejects the newer
+    /// status_display_type field gets one retry with the older activity shape.
     private func sendActivityLocked(_ activity: PresenceActivity?) -> Bool {
+        let outgoing = statusDisplayTypeRejected
+            ? activity.map(Self.legacyStatusActivity) : activity
+        let result = sendActivityFrameLocked(outgoing)
+        if result == .accepted { return true }
+        guard result == .rejected,
+              let activity,
+              activity.statusDisplayType != .name,
+              !statusDisplayTypeRejected,
+              !requiresAcknowledgement else { return false }
+
+        let fallback = sendActivityFrameLocked(Self.legacyStatusActivity(activity))
+        if fallback == .accepted {
+            statusDisplayTypeRejected = true
+            return true
+        }
+        return false
+    }
+
+    private static func legacyStatusActivity(_ activity: PresenceActivity) -> PresenceActivity {
+        var fallback = activity
+        switch activity.statusDisplayType {
+        case .name: break
+        case .details: fallback.name = activity.details
+        case .state: fallback.name = activity.state
+        }
+        fallback.statusDisplayType = .name
+        return fallback
+    }
+
+    private enum ActivitySendResult {
+        case accepted
+        case rejected
+        case unconfirmed
+        case disconnected
+    }
+
+    private func sendActivityFrameLocked(_ activity: PresenceActivity?) -> ActivitySendResult {
+        let nonce = UUID().uuidString
         guard
-            let body = Self.encodedSetActivityCommand(activity),
+            let body = Self.encodedSetActivityCommand(activity, nonce: nonce),
             writeFrame(.frame, body)
         else {
             disconnectLocked()
             updateConnectionStatusLocked(.retrying)
-            return false
+            return .disconnected
         }
-        // Drain Discord's reply (a FRAME acknowledging the command, or a PING). We
-        // service one frame so PINGs get a PONG; not strictly required per send, but
-        // keeps the connection healthy on a quiet socket.
-        return servicePendingFrame()
+        return servicePendingFrame(expectedNonce: nonce)
     }
 
     private static func activityPayload(from activity: PresenceActivity) -> ActivityPayload {
@@ -447,6 +520,7 @@ final class DiscordRPC: PresencePublishing {
         return ActivityPayload(
             type: Self.listeningType,
             name: Self.clamp(activity.name),
+            statusDisplayType: activity.statusDisplayType == .name ? nil : activity.statusDisplayType.rawValue,
             details: Self.clamp(activity.details),
             state: Self.clamp(activity.state),
             detailsURL: validatedHTTPSURLString(activity.detailsURL),
@@ -483,40 +557,48 @@ final class DiscordRPC: PresencePublishing {
         return payloads.isEmpty ? nil : payloads
     }
 
-    /// Drain Discord's reply after a send and handle PING→PONG / CLOSE. A timeout here
-    /// is normal — Discord often accepts a SET_ACTIVITY without replying — so a quiet
-    /// but live socket must stay connected (just return). Only a real close/error
-    /// disconnects; a real frame is handled.
-    private func servicePendingFrame() -> Bool {
-        switch readFrame() {
-        case .timedOut:
-            return true             // quiet but healthy socket — leave it connected
-        case .closed:
-            disconnectLocked()
-            updateConnectionStatusLocked(.retrying)
-            return false
-        case .frame(let op, let body):
-            return handle(op: op, body: body)
-        }
-    }
-
-    private func handle(op: Opcode, body: Data) -> Bool {
-        switch op {
-        case .ping:
-            // Echo the same body back as a PONG to stay connected.
-            guard writeFrame(.pong, body) else {
+    /// Discord may acknowledge a command with evt: ERROR. Treat that as a failed
+    /// publication, and skip unrelated frames while waiting for this command's nonce.
+    /// Normal playback accepts a timeout because some clients send no ACK. The
+    /// explicit probe requires a matching ACK before claiming publication or clear.
+    private func servicePendingFrame(expectedNonce: String) -> ActivitySendResult {
+        for _ in 0..<8 {
+            switch readFrame() {
+            case .timedOut:
+                return requiresAcknowledgement ? .unconfirmed : .accepted
+            case .closed:
                 disconnectLocked()
                 updateConnectionStatusLocked(.retrying)
-                return false
+                return .disconnected
+            case .frame(.ping, let body):
+                guard writeFrame(.pong, body) else {
+                    disconnectLocked()
+                    updateConnectionStatusLocked(.retrying)
+                    return .disconnected
+                }
+            case .frame(.close, _):
+                disconnectLocked()
+                updateConnectionStatusLocked(.retrying)
+                return .disconnected
+            case .frame(.frame, let body):
+                guard let reply = Self.activityReply(body, expectedNonce: expectedNonce) else {
+                    continue
+                }
+                return reply
+            case .frame(.handshake, _), .frame(.pong, _):
+                continue
             }
-        case .close:
-            disconnectLocked()
-            updateConnectionStatusLocked(.retrying)
-            return false
-        default:
-            break   // FRAME ack / PONG — nothing to do.
         }
-        return true
+        return requiresAcknowledgement ? .unconfirmed : .accepted
+    }
+
+    private static func activityReply(
+        _ body: Data,
+        expectedNonce: String
+    ) -> ActivitySendResult? {
+        guard let reply = (try? JSONSerialization.jsonObject(with: body)) as? [String: Any],
+              reply["nonce"] as? String == expectedNonce else { return nil }
+        return reply["evt"] as? String == "ERROR" ? .rejected : .accepted
     }
 
     // MARK: - Framing (on `queue`)

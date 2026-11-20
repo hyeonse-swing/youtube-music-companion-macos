@@ -285,3 +285,13 @@
 "Idle" = "대기";
 "Diagnostics stay on this Mac. Track titles are not written to the diagnostic counters shown here." = "진단 정보는 이 Mac에만 유지됩니다. 여기에 표시되는 진단 카운터에는 곡 제목이 기록되지 않습니다.";
 "Lyrics will be downloaded again and translations will be regenerated when those songs are played." = "해당 곡을 다시 재생하면 가사를 다운로드하고 번역을 다시 생성합니다.";
+
+"Set Up YouTube Music…" = "YouTube Music 설치 및 실행…";
+"Show Mini Player…" = "미니 플레이어 열기…";
+"Member list status" = "멤버 목록에 표시할 내용";
+"Application name" = "앱 이름";
+"Details line" = "첫 번째 줄";
+"Artist / status line" = "두 번째 줄";
+"Expand Player" = "플레이어 펼치기";
+"Pin to Side" = "화면 가장자리에 고정";
+"Close Now Playing" = "플레이어 닫기";

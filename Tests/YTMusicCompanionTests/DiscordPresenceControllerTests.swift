@@ -79,6 +79,31 @@ final class DiscordPresenceControllerTests: XCTestCase {
         XCTAssertEqual(publisher.activities.first?.largeImage, YouTubeMusicSource.discordAssetKey)
     }
 
+    func testLiveActivityUsesYouTubeMusicIdentityAndSongTitleStatus() {
+        let publisher = StubPublisher()
+        let controller = DiscordPresenceController(
+            publisher: publisher,
+            artworkResolver: StubArtworkResolver()
+        )
+        var track = makeTrack()
+        track.trackURL = URL(string: "https://music.youtube.com/watch?v=abc123")
+        controller.update(for: track)
+        let activity = publisher.activities.first
+        XCTAssertEqual(activity?.name, "YouTube Music")
+        XCTAssertEqual(activity?.statusDisplayType, .details)
+        XCTAssertEqual(activity?.details, "Test Song")
+        XCTAssertEqual(activity?.state, "Test Artist")
+        XCTAssertEqual(activity?.detailsURL, track.trackURL)
+
+        publisher.completeNext(with: true)
+        drainMainQueue()
+        var changed = DiscordPresenceConfiguration.standard
+        changed.statusDisplayType = .state
+        controller.update(for: track, configuration: changed)
+        XCTAssertEqual(publisher.activities.count, 2)
+        XCTAssertEqual(publisher.activities.last?.statusDisplayType, .state)
+    }
+
     func testCustomTextAndHiddenPlaybackTimeArePublished() {
         let publisher = StubPublisher()
         let controller = DiscordPresenceController(

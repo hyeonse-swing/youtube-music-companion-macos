@@ -15,6 +15,7 @@ private enum SettingsTab: String, CaseIterable, Identifiable {
 
 private struct CompanionSettingsView: View {
     @ObservedObject var model: PlayerModel
+    let showPlayerSetup: () -> Void
     @State private var selectedTab = SettingsTab.general
 
     var body: some View {
@@ -40,7 +41,7 @@ private struct CompanionSettingsView: View {
     private var selectedContent: some View {
         switch selectedTab {
         case .general:
-            GeneralSettingsView(model: model)
+            GeneralSettingsView(model: model, showPlayerSetup: showPlayerSetup)
         case .lyrics:
             LyricsSettingsView(model: model)
         case .metadata:
@@ -55,9 +56,14 @@ private struct CompanionSettingsView: View {
 
 private struct GeneralSettingsView: View {
     @ObservedObject var model: PlayerModel
+    let showPlayerSetup: () -> Void
 
     var body: some View {
         Form {
+            Section("YouTube Music") {
+                Button("Set Up YouTube Music…", action: showPlayerSetup)
+            }
+
             Section("Language & Region") {
                 Picker("App language", selection: $model.appLanguage) {
                     ForEach(AppLanguage.allCases) { language in
@@ -881,6 +887,13 @@ private struct DiscordSettingsView: View {
                 .font(.caption)
                 .foregroundStyle(.secondary)
 
+            Picker("Member list status", selection: $draft.statusDisplayType) {
+                ForEach(DiscordStatusDisplayType.allCases) { field in
+                    Text(AppLocalization.string(field.displayName, language: model.appLanguage))
+                        .tag(field)
+                }
+            }
+
             Picker("When playback pauses", selection: $draft.pausePolicy) {
                 ForEach(DiscordPausePolicy.allCases) { policy in
                     Text(
@@ -977,6 +990,10 @@ private struct DiscordSettingsView: View {
         }
 
         Section("Preview") {
+            LabeledContent("Member list status") {
+                Text(verbatim: memberStatusPreview)
+                    .lineLimit(2)
+            }
             DiscordPresencePreview(
                 activity: livePreviewActivity,
                 artwork: model.nowPlayingArtwork,
@@ -1138,6 +1155,15 @@ private struct DiscordSettingsView: View {
         return nil
     }
 
+    private var memberStatusPreview: String {
+        let activity = livePreviewActivity
+        switch draft.statusDisplayType {
+        case .name: return activity.name
+        case .details: return activity.details
+        case .state: return activity.state
+        }
+    }
+
     private var livePreviewActivity: PresenceActivity {
         let track = model.discordPreviewTrack ?? Self.exampleTrack
         let content = draft.content(for: track)
@@ -1146,7 +1172,7 @@ private struct DiscordSettingsView: View {
             ? Date().addingTimeInterval(-track.elapsed)
             : nil
         return PresenceActivity(
-            name: track.artist.isEmpty ? track.title : "\(track.title) - \(track.artist)",
+            name: YouTubeMusicSource.displayName,
             details: content.details,
             state: content.state,
             start: start,
@@ -1161,7 +1187,8 @@ private struct DiscordSettingsView: View {
             stateURL: links.stateURL,
             largeImageURL: links.coverURL,
             smallImageURL: nil,
-            buttons: links.buttons
+            buttons: links.buttons,
+            statusDisplayType: draft.statusDisplayType
         )
     }
 
@@ -1544,7 +1571,7 @@ final class SettingsWindowController: NSWindowController, NSWindowDelegate {
     private let onClose: () -> Void
     private var languageCancellable: AnyCancellable?
 
-    init(model: PlayerModel, onClose: @escaping () -> Void = {}) {
+    init(model: PlayerModel, showPlayerSetup: @escaping () -> Void, onClose: @escaping () -> Void = {}) {
         self.onClose = onClose
         let panel = NSPanel(
             contentRect: NSRect(x: 0, y: 0, width: 720, height: 650),
@@ -1566,7 +1593,7 @@ final class SettingsWindowController: NSWindowController, NSWindowDelegate {
         panel.collectionBehavior = [.moveToActiveSpace, .fullScreenAuxiliary]
         panel.hidesOnDeactivate = false
         panel.minSize = NSSize(width: 680, height: 600)
-        panel.contentView = NSHostingView(rootView: CompanionSettingsView(model: model))
+        panel.contentView = NSHostingView(rootView: CompanionSettingsView(model: model, showPlayerSetup: showPlayerSetup))
         languageCancellable = model.$appLanguage
             .removeDuplicates()
             .sink { [weak panel] language in

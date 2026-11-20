@@ -14,6 +14,9 @@ final class MenuBar: NSObject, NSMenuDelegate {
     private let appInformationWindow = AppInformationWindowController()
     private var nowPlayingWindow: NowPlayingWindowController?
     private var settingsWindow: SettingsWindowController?
+    private var setupWindow: YouTubeMusicSetupWindowController?
+    private let setupItem = NSMenuItem(title: "", action: #selector(openSetup), keyEquivalent: "")
+    private let compactItem = NSMenuItem(title: "", action: #selector(openCompact), keyEquivalent: "")
     private let resetOverlayPosition: () -> Void
 
     // Menu items we mutate from state — kept as references so we don't rebuild the
@@ -138,6 +141,8 @@ final class MenuBar: NSObject, NSMenuDelegate {
 
         showNowPlayingItem.target = self
         showNowPlayingItem.isEnabled = model.hasNowPlaying
+        setupItem.target = self
+        compactItem.target = self
         exactMetadataItem.target = self
         resetOverlayItem.target = self
         settingsItem.target = self
@@ -148,6 +153,8 @@ final class MenuBar: NSObject, NSMenuDelegate {
         menu.addItem(nowPlayingItem)
         menu.addItem(.separator())
         menu.addItem(showNowPlayingItem)
+        menu.addItem(compactItem)
+        menu.addItem(setupItem)
         menu.addItem(exactMetadataItem)
         menu.addItem(showOverlayItem)
         menu.addItem(resetOverlayItem)
@@ -174,17 +181,26 @@ final class MenuBar: NSObject, NSMenuDelegate {
         appInformationWindow.show(language: model.appLanguage)
     }
 
-    func showNowPlayingPanel() {
-        if let nowPlayingWindow {
-            nowPlayingWindow.show()
-            return
-        }
+    @objc func openSetup() {
+        if setupWindow == nil { setupWindow = YouTubeMusicSetupWindowController() }
+        setupWindow?.show(language: model.appLanguage)
+    }
 
-        let controller = NowPlayingWindowController(model: model) { [weak self] in
-            self?.nowPlayingWindow = nil
+    func updateSetupLanguage(_ language: AppLanguage) {
+        setupWindow?.updateLanguage(language)
+    }
+
+    @objc private func openCompact() {
+        showNowPlayingPanel(compact: true)
+    }
+
+    func showNowPlayingPanel(compact: Bool = false) {
+        if nowPlayingWindow == nil {
+            nowPlayingWindow = NowPlayingWindowController(model: model) { [weak self] in
+                self?.nowPlayingWindow = nil
+            }
         }
-        nowPlayingWindow = controller
-        controller.show()
+        if compact { nowPlayingWindow?.showCompact() } else { nowPlayingWindow?.show() }
     }
 
     func showSettingsPanel() {
@@ -193,7 +209,7 @@ final class MenuBar: NSObject, NSMenuDelegate {
             return
         }
 
-        let controller = SettingsWindowController(model: model) { [weak self] in
+        let controller = SettingsWindowController(model: model, showPlayerSetup: { [weak self] in self?.openSetup() }) { [weak self] in
             self?.settingsWindow = nil
         }
         settingsWindow = controller
@@ -273,6 +289,8 @@ final class MenuBar: NSObject, NSMenuDelegate {
                 : "Discord Rich Presence (Not Configured)",
             language: language
         )
+        setupItem.title = AppLocalization.string("Set Up YouTube Music…", language: language)
+        compactItem.title = AppLocalization.string("Show Mini Player…", language: language)
         settingsItem.title = AppLocalization.string(
             "Settings…",
             language: language
