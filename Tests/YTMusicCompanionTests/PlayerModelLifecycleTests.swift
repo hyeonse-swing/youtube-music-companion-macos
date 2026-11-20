@@ -280,11 +280,15 @@ final class PlayerModelLifecycleTests: XCTestCase {
             presenceController: DiscordPresenceController(publisher: publisher),
             defaults: defaults
         )
+        var weeklyConfiguration = DiscordPresenceConfiguration.standard
+        weeklyConfiguration.showsWeeklyArtistCount = true
+        model.applyDiscordPresenceConfiguration(weeklyConfiguration)
 
         XCTAssertNil(model.publishManualDiscordPresence(.example))
         let session = try XCTUnwrap(model.manualDiscordPresenceSession)
         XCTAssertEqual(publisher.activities.last?.details, ManualDiscordPresence.example.title)
         XCTAssertGreaterThan(session.expiresAt, session.startedAt)
+        XCTAssertNil(defaults.data(forKey: "weeklyListeningSnapshot"))
 
         model.returnToLiveDiscordPresence()
 
@@ -315,6 +319,172 @@ final class PlayerModelLifecycleTests: XCTestCase {
         XCTAssertNotNil(model.publishManualDiscordPresence(invalid))
         XCTAssertNil(model.manualDiscordPresenceSession)
         XCTAssertTrue(publisher.activities.isEmpty)
+    }
+
+    func testWeeklySummaryCountsLocalPlaybackBeforeSharingAndDropsHiddenTrack() {
+        let suiteName = "PlayerModelWeeklySummaryTests.\(UUID().uuidString)"
+        let defaults = UserDefaults(suiteName: suiteName)!
+        defer { defaults.removePersistentDomain(forName: suiteName) }
+
+        let current = track(title: "First")
+        let publisher = RecordingLifecyclePresencePublisher()
+        let model = PlayerModel(
+            presenceController: DiscordPresenceController(publisher: publisher),
+            metadataResolver: ImmediateMetadataResolver(),
+            nowPlayingQuery: SequenceNowPlayingQuery(tracks: [current]),
+            artworkQuery: EmptyArtworkQuery(),
+            defaults: defaults
+        )
+        model.appLanguage = .english
+        var configuration = DiscordPresenceConfiguration.standard
+        configuration.showsWeeklyArtistCount = true
+        model.applyDiscordPresenceConfiguration(configuration)
+        model.start()
+
+        let checked = expectation(description: "local weekly count and privacy")
+        DispatchQueue.main.asyncAfter(deadline: .now() + 0.3) {
+            XCTAssertEqual(model.discordPreviewWeeklyArtistCount, 1)
+            XCTAssertTrue(publisher.activities.isEmpty)
+
+            model.discordEnabled = true
+            XCTAssertEqual(publisher.activities.last?.state, "Artist · 1 song this week")
+
+            model.setCurrentDiscordTrackPrivate(true)
+            XCTAssertNil(model.discordPreviewWeeklyArtistCount)
+            XCTAssertEqual(WeeklyListeningStore(defaults: defaults).count(for: current), 0)
+            XCTAssertEqual(model.privateDiscordTrackCount, 1)
+
+            model.setCurrentDiscordTrackPrivate(false)
+            XCTAssertEqual(model.discordPreviewWeeklyArtistCount, 1)
+            XCTAssertEqual(model.privateDiscordTrackCount, 0)
+
+            configuration.showsWeeklyArtistCount = false
+            model.applyDiscordPresenceConfiguration(configuration)
+            XCTAssertEqual(WeeklyListeningStore(defaults: defaults).count(for: current), 0)
+            XCTAssertEqual(publisher.activities.last?.state, "Artist")
+            model.stop()
+            checked.fulfill()
+        }
+        wait(for: [checked], timeout: 2)
+    }
+
+    func testWeeklySummaryUsesCanonicalSourceArtistWithEnrichedScreenLabels() {
+        let suiteName = "PlayerModelWeeklyArtistAliasTests.\(UUID().uuidString)"
+        let defaults = UserDefaults(suiteName: suiteName)!
+        defer { defaults.removePersistentDomain(forName: suiteName) }
+        let source = track(title: "Source Song")
+        let publisher = RecordingLifecyclePresencePublisher()
+        let model = PlayerModel(
+            presenceController: DiscordPresenceController(publisher: publisher),
+            metadataResolver: FixedMetadataResolver(metadata: TrackMetadata(
+                title: "Screen Song", artist: "Screen Artist", album: "Screen Album"
+            )),
+            nowPlayingQuery: SequenceNowPlayingQuery(tracks: [source]),
+            artworkQuery: EmptyArtworkQuery(),
+            defaults: defaults
+        )
+        model.appLanguage = .english
+        var configuration = DiscordPresenceConfiguration.standard
+        configuration.showsWeeklyArtistCount = true
+        model.applyDiscordPresenceConfiguration(configuration)
+        model.discordEnabled = true
+        model.start()
+
+        let checked = expectation(description: "screen label and source weekly bucket")
+        DispatchQueue.main.asyncAfter(deadline: .now() + 0.3) {
+            XCTAssertEqual(publisher.activities.last?.details, "Screen Song")
+            XCTAssertEqual(publisher.activities.last?.name, "Screen Song - Screen Artist")
+            XCTAssertEqual(publisher.activities.last?.state, "Artist · 1 song this week")
+            XCTAssertEqual(model.discordPreviewWeeklyArtistCount, 1)
+            XCTAssertEqual(WeeklyListeningStore(defaults: defaults).count(for: source), 1)
+            model.stop()
+            checked.fulfill()
+        }
+        wait(for: [checked], timeout: 2)
+    }
+
+    func testLegacyURLOnlyPrivacyDefersUnresolvedSongAndMigratesExactMatch() {
+        let suiteName = "PlayerModelLegacyDiscordPrivacyTests.\(UUID().uuidString)"
+        let defaults = UserDefaults(suiteName: suiteName)!
+        defer { defaults.removePersistentDomain(forName: suiteName) }
+        let url = URL(string: "https://music.youtube.com/watch?v=private-song")!
+        var preferences = CompanionPreferences(defaults: defaults)
+        preferences.setDiscordTrackPrivate(true, identifier: url.absoluteString)
+        let current = track(title: "Private Song")
+        var configuration = DiscordPresenceConfiguration.standard
+        configuration.showsWeeklyArtistCount = true
+
+        let unresolvedPublisher = RecordingLifecyclePresencePublisher()
+        let unresolved = PlayerModel(
+            presenceController: DiscordPresenceController(publisher: unresolvedPublisher),
+            metadataResolver: ImmediateMetadataResolver(),
+            nowPlayingQuery: SequenceNowPlayingQuery(tracks: [current]),
+            artworkQuery: EmptyArtworkQuery(),
+            defaults: defaults
+        )
+        unresolved.applyDiscordPresenceConfiguration(configuration)
+        unresolved.discordEnabled = true
+        unresolved.start()
+
+        let checkedUnresolved = expectation(description: "unknown legacy URL stays private")
+        DispatchQueue.main.asyncAfter(deadline: .now() + 0.3) {
+            XCTAssertTrue(unresolvedPublisher.activities.isEmpty)
+            XCTAssertNil(unresolved.discordPreviewWeeklyArtistCount)
+            XCTAssertEqual(WeeklyListeningStore(defaults: defaults).count(for: current), 0)
+            unresolved.stop()
+            checkedUnresolved.fulfill()
+        }
+        wait(for: [checkedUnresolved], timeout: 2)
+
+        let resolvedPublisher = RecordingLifecyclePresencePublisher()
+        let resolved = PlayerModel(
+            presenceController: DiscordPresenceController(publisher: resolvedPublisher),
+            metadataResolver: FixedMetadataResolver(metadata: TrackMetadata(
+                title: current.title, artist: current.artist, album: current.album,
+                trackURL: url
+            )),
+            nowPlayingQuery: SequenceNowPlayingQuery(tracks: [current]),
+            artworkQuery: EmptyArtworkQuery(),
+            defaults: defaults
+        )
+        resolved.discordEnabled = true
+        resolved.start()
+
+        let checkedResolved = expectation(description: "exact URL stays hidden after migration")
+        DispatchQueue.main.asyncAfter(deadline: .now() + 0.3) {
+            XCTAssertTrue(resolvedPublisher.activities.isEmpty)
+            XCTAssertNil(resolved.discordPreviewWeeklyArtistCount)
+            XCTAssertEqual(resolved.privateDiscordTrackCount, 1)
+            XCTAssertFalse(CompanionPreferences(defaults: defaults).hasUnboundDiscordPrivateTracks)
+            XCTAssertTrue(CompanionPreferences(defaults: defaults).isDiscordTrackPrivate(
+                identifier: url.absoluteString
+            ))
+            resolved.stop()
+            checkedResolved.fulfill()
+        }
+        wait(for: [checkedResolved], timeout: 2)
+
+        let publicPublisher = RecordingLifecyclePresencePublisher()
+        let publicTrack = track(title: "Unrelated Public Song")
+        let publicModel = PlayerModel(
+            presenceController: DiscordPresenceController(publisher: publicPublisher),
+            metadataResolver: ImmediateMetadataResolver(),
+            nowPlayingQuery: SequenceNowPlayingQuery(tracks: [publicTrack]),
+            artworkQuery: EmptyArtworkQuery(),
+            defaults: defaults
+        )
+        publicModel.discordEnabled = true
+        publicModel.start()
+        let checkedPublic = expectation(description: "known private song does not block another song")
+        DispatchQueue.main.asyncAfter(deadline: .now() + 0.3) {
+            XCTAssertEqual(publicPublisher.activities.last?.details, "Unrelated Public Song")
+            XCTAssertEqual(publicPublisher.activities.last?.name,
+                           "Unrelated Public Song - Artist")
+            XCTAssertEqual(publicModel.discordPreviewWeeklyArtistCount, 1)
+            publicModel.stop()
+            checkedPublic.fulfill()
+        }
+        wait(for: [checkedPublic], timeout: 2)
     }
 
     func testOverlayPresetAppliesRecommendedSizeAndCanResetAppearance() {
@@ -355,6 +525,37 @@ final class PlayerModelLifecycleTests: XCTestCase {
             sourceBundle: "com.google.Chrome.app.cinhimbnkkaeohfgghhklpknlkffjgod",
             sourcePID: 0
         )
+    }
+    func testSongLinkAppearsWhenTheSameTrackGainsAWatchURL() {
+        let suiteName = "PlayerModelSongLinkRetryTests.\(UUID().uuidString)"
+        let defaults = UserDefaults(suiteName: suiteName)!
+        defer { defaults.removePersistentDomain(forName: suiteName) }
+
+        let source = track(title: "Source Song")
+        let url = URL(string: "https://music.youtube.com/watch?v=abc123")!
+        let resolver = LinkAfterPlayerPageMetadataResolver(url: url)
+        let publisher = RecordingLifecyclePresencePublisher()
+        let model = PlayerModel(
+            presenceController: DiscordPresenceController(publisher: publisher),
+            metadataResolver: resolver,
+            nowPlayingQuery: SequenceNowPlayingQuery(tracks: [source]),
+            artworkQuery: EmptyArtworkQuery(),
+            defaults: defaults,
+            metadataRetryInterval: 0
+        )
+        model.discordEnabled = true
+        model.start()
+        defer { model.stop() }
+
+        wait(for: [resolver.secondResolution], timeout: 4)
+        let published = expectation(description: "same-track link republished")
+        DispatchQueue.main.asyncAfter(deadline: .now() + 0.2) {
+            XCTAssertNil(publisher.activities.first?.detailsURL)
+            XCTAssertEqual(publisher.activities.last?.detailsURL, url)
+            XCTAssertEqual(model.discordPreviewTrack?.trackURL, url)
+            published.fulfill()
+        }
+        wait(for: [published], timeout: 2)
     }
 }
 
@@ -422,6 +623,7 @@ private final class LifecyclePresencePublisher: PresencePublishing {
 
     func clear() {}
     func disconnect() {}
+
 }
 
 private final class RecordingLifecyclePresencePublisher: PresencePublishing {
@@ -460,6 +662,35 @@ private final class SequenceNowPlayingQuery: NowPlayingQuerying, @unchecked Send
             calls += 1
             return tracks[index]
         }
+    }
+}
+
+private struct FixedMetadataResolver: TrackMetadataResolving {
+    let metadata: TrackMetadata
+
+    func resolve(for track: NowPlaying) -> TrackMetadata? { metadata }
+}
+
+private final class LinkAfterPlayerPageMetadataResolver: TrackMetadataResolving, @unchecked Sendable {
+    let secondResolution = XCTestExpectation(description: "watch URL resolved")
+    private let lock = NSLock()
+    private let url: URL
+    private var calls = 0
+
+    init(url: URL) { self.url = url }
+
+    func resolve(for track: NowPlaying) -> TrackMetadata? {
+        let call = lock.withLock { () -> Int in
+            calls += 1
+            return calls
+        }
+        if call == 2 { secondResolution.fulfill() }
+        return TrackMetadata(
+            title: "Screen Song",
+            artist: "Screen Artist",
+            album: "Screen Album",
+            trackURL: call == 1 ? nil : url
+        )
     }
 }
 

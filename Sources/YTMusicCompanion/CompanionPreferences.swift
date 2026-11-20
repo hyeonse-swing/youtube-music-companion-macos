@@ -62,6 +62,7 @@ struct CompanionPreferences {
     private static let discordImageTextTemplateKey = "discordImageTextTemplate"
     private static let discordShowsPlaybackTimeKey = "discordShowsPlaybackTime"
     private static let discordShowsSongLinkKey = "discordShowsSongLink"
+    private static let discordShowsWeeklyArtistCountKey = "discordShowsWeeklyArtistCount"
     private static let discordStatusDisplayTypeKey = "discordStatusDisplayType"
     private static let discordPresetKey = "discordPreset"
     private static let discordPausePolicyKey = "discordPausePolicy"
@@ -72,11 +73,15 @@ struct CompanionPreferences {
     private static let discordSecondaryButtonLabelKey = "discordSecondaryButtonLabel"
     private static let discordSecondaryButtonURLKey = "discordSecondaryButtonURL"
     private static let discordPrivateTrackFingerprintsKey = "discordPrivateTrackFingerprints"
+    private static let discordPrivateSourceFingerprintsKey = "discordPrivateSourceFingerprints"
+    private static let discordPrivateTrackAliasesKey = "discordPrivateTrackAliases"
 
     private let defaults: UserDefaults
     private var trackOffsets: [String: Double]
     private var lyricSelections: [String: String]
     private var discordPrivateTrackFingerprints: Set<String>
+    private var discordPrivateSourceFingerprints: Set<String>
+    private var discordPrivateTrackAliases: [String: String]
 
     var lyricsFontSize: Double {
         didSet {
@@ -164,6 +169,10 @@ struct CompanionPreferences {
                 discordPresenceConfiguration.showsSongLink,
                 forKey: Self.discordShowsSongLinkKey
             )
+            defaults.set(
+                discordPresenceConfiguration.showsWeeklyArtistCount,
+                forKey: Self.discordShowsWeeklyArtistCountKey
+            )
             defaults.set(discordPresenceConfiguration.statusDisplayType.rawValue, forKey: Self.discordStatusDisplayTypeKey)
             defaults.set(
                 discordPresenceConfiguration.preset.rawValue,
@@ -231,9 +240,14 @@ struct CompanionPreferences {
             rawValue: defaults.string(forKey: Self.discordMetadataSourceKey) ?? ""
         ) ?? .youtubeMusic
         let standardPresence = DiscordPresenceConfiguration.standard
+        let savedPreset = defaults.string(forKey: Self.discordPresetKey).flatMap(DiscordPresencePreset.init(rawValue:))
+        var detailsTemplate = defaults.string(forKey: Self.discordDetailsTemplateKey) ?? standardPresence.detailsTemplate
+        if savedPreset == .originalFirst,
+           detailsTemplate == DiscordPresenceConfiguration.artistAndTitle {
+            detailsTemplate = standardPresence.detailsTemplate
+        }
         discordPresenceConfiguration = DiscordPresenceConfiguration(
-            detailsTemplate: defaults.string(forKey: Self.discordDetailsTemplateKey)
-                ?? standardPresence.detailsTemplate,
+            detailsTemplate: detailsTemplate,
             stateTemplate: defaults.string(forKey: Self.discordStateTemplateKey)
                 ?? standardPresence.stateTemplate,
             imageTextTemplate: defaults.string(forKey: Self.discordImageTextTemplateKey)
@@ -242,11 +256,11 @@ struct CompanionPreferences {
                 ?? standardPresence.showsPlaybackTime,
             showsSongLink: defaults.object(forKey: Self.discordShowsSongLinkKey) as? Bool
                 ?? standardPresence.showsSongLink,
+            showsWeeklyArtistCount: defaults.object(forKey: Self.discordShowsWeeklyArtistCountKey) as? Bool
+                ?? standardPresence.showsWeeklyArtistCount,
             statusDisplayType: (defaults.object(forKey: Self.discordStatusDisplayTypeKey) as? Int)
                 .flatMap(DiscordStatusDisplayType.init(rawValue:)) ?? standardPresence.statusDisplayType,
-            preset: DiscordPresencePreset(
-                rawValue: defaults.string(forKey: Self.discordPresetKey) ?? ""
-            ) ?? standardPresence.preset,
+            preset: savedPreset ?? standardPresence.preset,
             pausePolicy: DiscordPausePolicy(
                 rawValue: defaults.string(forKey: Self.discordPausePolicyKey) ?? ""
             ) ?? standardPresence.pausePolicy,
@@ -272,9 +286,17 @@ struct CompanionPreferences {
         trackOffsets = (defaults.dictionary(forKey: Self.trackOffsetsKey) ?? [:])
             .compactMapValues { ($0 as? NSNumber)?.doubleValue }
         lyricSelections = defaults.dictionary(forKey: Self.lyricSelectionsKey) as? [String: String] ?? [:]
-        discordPrivateTrackFingerprints = Set(
+        let storedPrivateFingerprints = Set(
             defaults.stringArray(forKey: Self.discordPrivateTrackFingerprintsKey) ?? []
         )
+        discordPrivateTrackFingerprints = storedPrivateFingerprints
+        discordPrivateSourceFingerprints = Set(
+            defaults.stringArray(forKey: Self.discordPrivateSourceFingerprintsKey) ?? []
+        ).intersection(storedPrivateFingerprints)
+        discordPrivateTrackAliases = (defaults.dictionary(forKey: Self.discordPrivateTrackAliasesKey)
+            as? [String: String] ?? [:]).filter {
+                storedPrivateFingerprints.contains($0.value)
+            }
         defaults.removeObject(forKey: Self.learnedOffsetKey)
     }
 
@@ -319,6 +341,7 @@ struct CompanionPreferences {
             Self.discordImageTextTemplateKey,
             Self.discordShowsPlaybackTimeKey,
             Self.discordShowsSongLinkKey,
+            Self.discordShowsWeeklyArtistCountKey,
             Self.discordStatusDisplayTypeKey,
             Self.discordPresetKey,
             Self.discordPausePolicyKey,
@@ -332,11 +355,19 @@ struct CompanionPreferences {
     }
 
     func isDiscordTrackPrivate(identifier: String) -> Bool {
-        discordPrivateTrackFingerprints.contains(Self.fingerprint(identifier))
+        let fingerprint = Self.fingerprint(identifier)
+        return discordPrivateTrackFingerprints.contains(fingerprint)
+            || discordPrivateTrackAliases[fingerprint].map(discordPrivateTrackFingerprints.contains) == true
     }
 
     var privateDiscordTrackCount: Int {
         discordPrivateTrackFingerprints.count
+    }
+
+    /// Older saved entries may contain only a song URL. Until the exact page URL
+    /// is available, their MediaRemote identity cannot be matched safely.
+    var hasUnboundDiscordPrivateTracks: Bool {
+        !discordPrivateTrackFingerprints.isSubset(of: discordPrivateSourceFingerprints)
     }
 
     mutating func setDiscordTrackPrivate(_ isPrivate: Bool, identifier: String) {
@@ -344,14 +375,57 @@ struct CompanionPreferences {
         if isPrivate {
             discordPrivateTrackFingerprints.insert(fingerprint)
         } else {
-            discordPrivateTrackFingerprints.remove(fingerprint)
+            let source = discordPrivateTrackAliases[fingerprint] ?? fingerprint
+            discordPrivateTrackFingerprints.remove(source)
+            discordPrivateSourceFingerprints.remove(source)
+            discordPrivateTrackAliases = discordPrivateTrackAliases.filter { $0.value != source }
         }
+        persistPrivateDiscordTracks()
+    }
+
+    /// One MediaRemote identity is the durable entry. Screen labels and the song
+    /// URL are accepted as aliases while migrating older saved private entries.
+    mutating func setDiscordTrackPrivate(
+        _ isPrivate: Bool,
+        sourceIdentifier: String,
+        aliases: [String]
+    ) {
+        let source = Self.fingerprint(sourceIdentifier)
+        let related = Set(aliases.map(Self.fingerprint)).union([source])
+        let previousPrivate = discordPrivateTrackFingerprints
+        let previousKnownSources = discordPrivateSourceFingerprints
+        let previousAliases = discordPrivateTrackAliases
+        let relatedSources = Set(related.compactMap { discordPrivateTrackAliases[$0] })
+        let removedSources = relatedSources.union(discordPrivateTrackFingerprints.intersection(related))
+        let rememberedAliases = Set(discordPrivateTrackAliases.compactMap {
+            removedSources.contains($0.value) ? $0.key : nil
+        })
+        discordPrivateTrackFingerprints.subtract(removedSources)
+        discordPrivateSourceFingerprints.subtract(removedSources)
+        discordPrivateTrackAliases = discordPrivateTrackAliases.filter {
+            !removedSources.contains($0.value)
+        }
+        if isPrivate {
+            discordPrivateTrackFingerprints.insert(source)
+            discordPrivateSourceFingerprints.insert(source)
+            for alias in related.union(rememberedAliases).union(removedSources)
+                where alias != source {
+                discordPrivateTrackAliases[alias] = source
+            }
+        }
+        guard discordPrivateTrackFingerprints != previousPrivate
+            || discordPrivateSourceFingerprints != previousKnownSources
+            || discordPrivateTrackAliases != previousAliases else { return }
         persistPrivateDiscordTracks()
     }
 
     mutating func clearPrivateDiscordTracks() {
         discordPrivateTrackFingerprints.removeAll()
+        discordPrivateSourceFingerprints.removeAll()
+        discordPrivateTrackAliases.removeAll()
         defaults.removeObject(forKey: Self.discordPrivateTrackFingerprintsKey)
+        defaults.removeObject(forKey: Self.discordPrivateSourceFingerprintsKey)
+        defaults.removeObject(forKey: Self.discordPrivateTrackAliasesKey)
     }
 
     private static func clampLyricsFontSize(_ value: Double) -> Double {
@@ -367,11 +441,26 @@ struct CompanionPreferences {
     private func persistPrivateDiscordTracks() {
         if discordPrivateTrackFingerprints.isEmpty {
             defaults.removeObject(forKey: Self.discordPrivateTrackFingerprintsKey)
+            defaults.removeObject(forKey: Self.discordPrivateSourceFingerprintsKey)
+            defaults.removeObject(forKey: Self.discordPrivateTrackAliasesKey)
         } else {
             defaults.set(
                 discordPrivateTrackFingerprints.sorted(),
                 forKey: Self.discordPrivateTrackFingerprintsKey
             )
+            if discordPrivateSourceFingerprints.isEmpty {
+                defaults.removeObject(forKey: Self.discordPrivateSourceFingerprintsKey)
+            } else {
+                defaults.set(
+                    discordPrivateSourceFingerprints.sorted(),
+                    forKey: Self.discordPrivateSourceFingerprintsKey
+                )
+            }
+            if discordPrivateTrackAliases.isEmpty {
+                defaults.removeObject(forKey: Self.discordPrivateTrackAliasesKey)
+            } else {
+                defaults.set(discordPrivateTrackAliases, forKey: Self.discordPrivateTrackAliasesKey)
+            }
         }
     }
 }

@@ -7,11 +7,15 @@ import XCTest
 final class VerifiedArtworkResolverTests: XCTestCase {
     func testReturnsPublicURLOnlyWhenCandidateMatchesSourceArtwork() throws {
         let candidate = try XCTUnwrap(URL(string: "https://example.com/100x100bb.jpg"))
+        let upgraded = try XCTUnwrap(URL(string: "https://example.com/512x512bb.jpg"))
         let sourceData = try makeArtworkData(accent: red, type: .png)
         let candidateData = try makeArtworkData(accent: red, type: .jpeg)
         let resolver = VerifiedArtworkResolver(
             catalog: StubArtworkCatalog(urls: [candidate]),
-            loader: StubArtworkDataLoader(values: [candidate: candidateData])
+            loader: StubArtworkDataLoader(values: [
+                candidate: candidateData,
+                upgraded: candidateData,
+            ])
         )
 
         let result = resolver.coverURL(
@@ -45,6 +49,79 @@ final class VerifiedArtworkResolverTests: XCTestCase {
         )
 
         XCTAssertNil(result)
+    }
+
+    func testUsesMatchingCoverAfterAWrongCatalogCandidate() throws {
+        let wrong = try XCTUnwrap(URL(string: "https://example.com/wrong/100x100bb.jpg"))
+        let correct = try XCTUnwrap(URL(string: "https://example.com/correct/100x100bb.jpg"))
+        let upgraded = try XCTUnwrap(URL(string: "https://example.com/correct/512x512bb.jpg"))
+        let sourceData = try makeArtworkData(accent: red, type: .png)
+        let correctData = try makeArtworkData(accent: red, type: .jpeg)
+        let resolver = VerifiedArtworkResolver(
+            catalog: StubArtworkCatalog(urls: [wrong, correct]),
+            loader: StubArtworkDataLoader(values: [
+                wrong: try makeArtworkData(accent: blue, type: .jpeg),
+                correct: correctData,
+                upgraded: correctData,
+            ])
+        )
+
+        let result = resolver.coverURL(
+            for: makeTrack(),
+            sourceArtwork: try XCTUnwrap(NowPlayingArtwork(
+                data: sourceData,
+                width: 64,
+                height: 64
+            ))
+        )
+
+        XCTAssertEqual(result, "https://example.com/correct/512x512bb.jpg")
+    }
+
+    func testKeepsVerifiedThumbnailWhenHigherResolutionHasDifferentPixels() throws {
+        let candidate = try XCTUnwrap(URL(string: "https://example.com/100x100bb.jpg"))
+        let upgraded = try XCTUnwrap(URL(string: "https://example.com/512x512bb.jpg"))
+        let sourceData = try makeArtworkData(accent: red, type: .png)
+        let resolver = VerifiedArtworkResolver(
+            catalog: StubArtworkCatalog(urls: [candidate]),
+            loader: StubArtworkDataLoader(values: [
+                candidate: try makeArtworkData(accent: red, type: .jpeg),
+                upgraded: try makeArtworkData(accent: blue, type: .jpeg),
+            ])
+        )
+
+        let result = resolver.coverURL(
+            for: makeTrack(),
+            sourceArtwork: try XCTUnwrap(NowPlayingArtwork(
+                data: sourceData,
+                width: 64,
+                height: 64
+            ))
+        )
+
+        XCTAssertEqual(result, candidate.absoluteString)
+    }
+
+    func testKeepsVerifiedThumbnailWhenHigherResolutionCannotBeLoaded() throws {
+        let candidate = try XCTUnwrap(URL(string: "https://example.com/100x100bb.jpg"))
+        let sourceData = try makeArtworkData(accent: red, type: .png)
+        let resolver = VerifiedArtworkResolver(
+            catalog: StubArtworkCatalog(urls: [candidate]),
+            loader: StubArtworkDataLoader(values: [
+                candidate: try makeArtworkData(accent: red, type: .jpeg),
+            ])
+        )
+
+        let result = resolver.coverURL(
+            for: makeTrack(),
+            sourceArtwork: try XCTUnwrap(NowPlayingArtwork(
+                data: sourceData,
+                width: 64,
+                height: 64
+            ))
+        )
+
+        XCTAssertEqual(result, candidate.absoluteString)
     }
 
     private func makeTrack() -> NowPlaying {

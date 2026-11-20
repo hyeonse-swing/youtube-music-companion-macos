@@ -71,12 +71,16 @@ final class PlayerModel: ObservableObject {
                         sessionKey: session.sessionKey
                     )
                 } else if let lastDiscordNowPlaying,
-                          !isDiscordTrackPrivate(lastDiscordNowPlaying)
+                          !isCurrentDiscordTrackPrivate,
+                          !shouldDeferDiscordActivityForPrivacy
                 {
                     presenceController.update(
                         for: lastDiscordNowPlaying,
                         sourceArtwork: nowPlayingArtwork,
-                        configuration: discordPresenceConfiguration
+                        configuration: discordPresenceConfiguration,
+                        weeklyArtistCount: weeklyArtistCount(for: lastDiscordNowPlaying),
+                        weeklyArtist: latestSourceSnapshot?.artist,
+                        language: appLanguage
                     )
                 }
             } else {
@@ -145,6 +149,9 @@ final class PlayerModel: ObservableObject {
         didSet {
             guard appLanguage != oldValue else { return }
             preferences.appLanguage = appLanguage
+            if discordPresenceConfiguration.showsWeeklyArtistCount {
+                republishDiscordPresenceIfNeeded()
+            }
         }
     }
 
@@ -169,8 +176,10 @@ final class PlayerModel: ObservableObject {
     private let defaults: UserDefaults
     private let presenceController: DiscordPresenceController
     private let metadataResolver: TrackMetadataResolving
+    private let metadataRetryInterval: TimeInterval
     private let nowPlayingQuery: NowPlayingQuerying
     private let artworkQuery: NowPlayingArtworkQuerying
+    private let weeklyListeningStore: WeeklyListeningStore
     private var preferences: CompanionPreferences
 
     /// Current "Artist · Title" for the menubar readout, or nil when idle. Uses a
@@ -239,9 +248,16 @@ final class PlayerModel: ObservableObject {
 
     var discordPreviewTrack: NowPlaying? { lastDiscordNowPlaying }
 
+    var discordPreviewWeeklyArtistCount: Int? {
+        guard let lastDiscordNowPlaying else { return nil }
+        return weeklyArtistCount(for: lastDiscordNowPlaying, recordPlayback: false)
+    }
+
     var isCurrentDiscordTrackPrivate: Bool {
         guard let lastDiscordNowPlaying else { return false }
         return isDiscordTrackPrivate(lastDiscordNowPlaying)
+            || latestSourceSnapshot.map(isDiscordTrackPrivate) == true
+            || latestYouTubeMusicSnapshot.map(isDiscordTrackPrivate) == true
     }
 
     var privateDiscordTrackCount: Int {
@@ -308,15 +324,12 @@ final class PlayerModel: ObservableObject {
     )
     private var activatedTrackKey: String?
 
-    // Artwork is requested when a track begins. Successful bytes and definitive
-    // misses live in small session caches, so one-second playback polling never
-    // performs image work while long listening sessions stay memory-bounded.
+    // The PWA may publish the cover after the track changes. Cache successful
+    // images and give the bridge time to populate a missing one before retrying.
     private var artworkCache = LRUCache<String, NowPlayingArtwork>(
         capacity: SessionCacheLimits.artwork
     )
-    private var missingArtworkKeys = BoundedSet<String>(
-        capacity: SessionCacheLimits.negativeResults
-    )
+    private var artworkRetries = ArtworkRetrySchedule(delay: 15)
 
     // What syncOffset was set to when the current track loaded. Lets `commit`
     // tell a deliberate adjustment from an untouched track, so only songs you
@@ -358,16 +371,19 @@ final class PlayerModel: ObservableObject {
         nowPlayingQuery: NowPlayingQuerying = DefaultNowPlayingQuery(),
         artworkQuery: NowPlayingArtworkQuerying = DefaultNowPlayingArtworkQuery(),
         defaults: UserDefaults = .standard,
-        mediaPriority: SystemMediaPriority? = nil
+        mediaPriority: SystemMediaPriority? = nil,
+        metadataRetryInterval: TimeInterval = 15
     ) {
         self.mediaPriority = mediaPriority
         let preferences = CompanionPreferences(defaults: defaults)
         self.presenceController = presenceController
         self.metadataResolver = metadataResolver
+        self.metadataRetryInterval = metadataRetryInterval
         self.nowPlayingQuery = nowPlayingQuery
         self.artworkQuery = artworkQuery
         self.defaults = defaults
         self.preferences = preferences
+        weeklyListeningStore = WeeklyListeningStore(defaults: defaults)
         overlayEnabled = defaults.object(forKey: Self.overlayEnabledKey) as? Bool ?? true
         discordEnabled = defaults.object(forKey: Self.discordEnabledKey) as? Bool ?? false
         lyricsFontSize = preferences.lyricsFontSize
@@ -395,6 +411,9 @@ final class PlayerModel: ObservableObject {
             }
         }
         syncOffset = 0
+        if !discordPresenceConfiguration.showsWeeklyArtistCount {
+            weeklyListeningStore.reset()
+        }
         presenceController.onConnectionStatusChange = { [weak self] status in
             self?.discordConnectionStatus = status
             self?.refreshRuntimeDiagnostics()
@@ -545,6 +564,8 @@ final class PlayerModel: ObservableObject {
         let sourceKey = source.trackKey
         if sourceKey != currentTrackKey {
             beginTrack(source, sourceKey: sourceKey)
+        } else if nowPlayingArtwork == nil, source.isPlaying {
+            loadArtwork(sourceKey: sourceKey)
         }
 
         if let metadata = metadataCache[sourceKey] {
@@ -553,6 +574,12 @@ final class PlayerModel: ObservableObject {
                 youtubeMusicTrack: source.applying(metadata),
                 sourceKey: sourceKey
             )
+            // The player can start on Home, then gain an exact /watch URL when
+            // its player page opens. Keep the good labels while looking again.
+            if metadata.trackURL == nil,
+               metadataRetryAfter[sourceKey] ?? .distantPast <= Date() {
+                resolveMetadata(for: source, sourceKey: sourceKey)
+            }
         } else if let retryAfter = metadataRetryAfter[sourceKey], retryAfter > Date() {
             updateActiveTrack(source: source, youtubeMusicTrack: nil, sourceKey: sourceKey)
         } else {
@@ -609,6 +636,11 @@ final class PlayerModel: ObservableObject {
     private func beginTrack(_ source: NowPlaying, sourceKey: String) {
         if let leaving = currentTrackKey { commit(for: leaving) }
         cancelTrackOperations()
+
+        // Re-entering a song with the same text does not prove it has the same
+        // YouTube video ID. Resolve its current watch link again on each entry.
+        metadataCache.removeValue(forKey: sourceKey)
+        metadataRetryAfter.removeValue(forKey: sourceKey)
 
         currentTrackKey = sourceKey
         activatedTrackKey = nil
@@ -678,12 +710,21 @@ final class PlayerModel: ObservableObject {
             // Keep playback functional while offline, then retry at a restrained
             // interval instead of either giving up for the session or hammering the
             // storefront once per one-second playback poll.
-            metadataRetryAfter[sourceKey] = Date().addingTimeInterval(15)
-            updateActiveTrack(source: latest, youtubeMusicTrack: nil, sourceKey: sourceKey)
+            metadataRetryAfter[sourceKey] = Date().addingTimeInterval(metadataRetryInterval)
+            updateActiveTrack(
+                source: latest,
+                youtubeMusicTrack: metadataCache[sourceKey].map(latest.applying),
+                sourceKey: sourceKey
+            )
             return
         }
 
         metadataCache[sourceKey] = metadata
+        if metadata.trackURL == nil {
+            metadataRetryAfter[sourceKey] = Date().addingTimeInterval(metadataRetryInterval)
+        } else {
+            metadataRetryAfter.removeValue(forKey: sourceKey)
+        }
         updateActiveTrack(
             source: latest,
             youtubeMusicTrack: latest.applying(metadata),
@@ -730,15 +771,21 @@ final class PlayerModel: ObservableObject {
             macOS: source
         ) ?? source
         lastDiscordNowPlaying = discordTrack
-        if discordEnabled,
-           manualDiscordPresenceSession == nil,
-           !isDiscordTrackPrivate(discordTrack)
-        {
-            presenceController.update(
-                for: discordTrack,
-                sourceArtwork: nowPlayingArtwork,
-                configuration: discordPresenceConfiguration
-            )
+        reconcileCurrentDiscordPrivacy(source: source, displayedTrack: discordTrack)
+        let weeklyCount = weeklyArtistCount(for: discordTrack)
+        if discordEnabled, manualDiscordPresenceSession == nil {
+            if isCurrentDiscordTrackPrivate || shouldDeferDiscordActivityForPrivacy {
+                presenceController.clear()
+            } else {
+                presenceController.update(
+                    for: discordTrack,
+                    sourceArtwork: nowPlayingArtwork,
+                    configuration: discordPresenceConfiguration,
+                    weeklyArtistCount: weeklyCount,
+                    weeklyArtist: source.artist,
+                    language: appLanguage
+                )
+            }
         }
     }
 
@@ -758,9 +805,9 @@ final class PlayerModel: ObservableObject {
             nowPlayingArtwork = cached
             return
         }
-        nowPlayingArtwork = nil
+        if nowPlayingArtwork != nil { nowPlayingArtwork = nil }
         guard
-            !missingArtworkKeys.contains(sourceKey),
+            artworkRetries.allows(sourceKey),
             artworkOperation?.key != sourceKey
         else { return }
 
@@ -808,16 +855,20 @@ final class PlayerModel: ObservableObject {
             if discordEnabled,
                manualDiscordPresenceSession == nil,
                let lastDiscordNowPlaying,
-               !isDiscordTrackPrivate(lastDiscordNowPlaying)
+               !isCurrentDiscordTrackPrivate,
+               !shouldDeferDiscordActivityForPrivacy
             {
                 presenceController.update(
                     for: lastDiscordNowPlaying,
                     sourceArtwork: artwork,
-                    configuration: discordPresenceConfiguration
+                    configuration: discordPresenceConfiguration,
+                    weeklyArtistCount: weeklyArtistCount(for: lastDiscordNowPlaying),
+                    weeklyArtist: latestSourceSnapshot?.artist,
+                    language: appLanguage
                 )
             }
         } else {
-            missingArtworkKeys.insert(sourceKey)
+            artworkRetries.recordMiss(sourceKey)
             nowPlayingArtwork = nil
         }
     }
@@ -1092,8 +1143,16 @@ final class PlayerModel: ObservableObject {
 
     func applyDiscordPresenceConfiguration(_ configuration: DiscordPresenceConfiguration) {
         guard configuration != discordPresenceConfiguration else { return }
+        let stoppedWeeklyCount = discordPresenceConfiguration.showsWeeklyArtistCount
+            && !configuration.showsWeeklyArtistCount
         discordPresenceConfiguration = configuration
         preferences.discordPresenceConfiguration = configuration
+        if stoppedWeeklyCount {
+            weeklyListeningStore.reset()
+        } else if configuration.showsWeeklyArtistCount,
+                  let lastDiscordNowPlaying {
+            _ = weeklyArtistCount(for: lastDiscordNowPlaying)
+        }
         republishDiscordPresenceIfNeeded()
     }
 
@@ -1101,6 +1160,7 @@ final class PlayerModel: ObservableObject {
         let changed = discordPresenceConfiguration != .standard
         preferences.resetDiscordPresenceConfiguration()
         discordPresenceConfiguration = .standard
+        weeklyListeningStore.reset()
         if changed { republishDiscordPresenceIfNeeded() }
     }
 
@@ -1140,16 +1200,23 @@ final class PlayerModel: ObservableObject {
     }
 
     func setCurrentDiscordTrackPrivate(_ isPrivate: Bool) {
-        guard let track = lastDiscordNowPlaying else { return }
+        guard let track = lastDiscordNowPlaying,
+              let source = latestSourceSnapshot else { return }
+        let aliases = discordPrivacyIdentifiers(for: source)
+            + discordPrivacyIdentifiers(for: track)
+            + (latestYouTubeMusicSnapshot.map(discordPrivacyIdentifiers) ?? [])
         preferences.setDiscordTrackPrivate(
             isPrivate,
-            identifier: discordPrivacyIdentifier(for: track)
+            sourceIdentifier: source.trackKey,
+            aliases: aliases
         )
+        if isPrivate { weeklyListeningStore.remove(track: source) }
         objectWillChange.send()
         guard manualDiscordPresenceSession == nil else { return }
         if isPrivate {
             presenceController.clear()
         } else {
+            _ = weeklyArtistCount(for: track)
             republishDiscordPresenceIfNeeded()
         }
     }
@@ -1157,25 +1224,53 @@ final class PlayerModel: ObservableObject {
     func clearPrivateDiscordTracks() {
         preferences.clearPrivateDiscordTracks()
         objectWillChange.send()
+        if let lastDiscordNowPlaying {
+            _ = weeklyArtistCount(for: lastDiscordNowPlaying)
+        }
         republishDiscordPresenceIfNeeded()
     }
 
     private func republishDiscordPresenceIfNeeded(clearsWhenUnavailable: Bool = false) {
         guard discordEnabled,
               manualDiscordPresenceSession == nil,
-              let lastDiscordNowPlaying,
-              !isDiscordTrackPrivate(lastDiscordNowPlaying)
+              let lastDiscordNowPlaying
         else {
             if clearsWhenUnavailable {
                 presenceController.clear()
             }
             return
         }
+        guard !isCurrentDiscordTrackPrivate,
+              !shouldDeferDiscordActivityForPrivacy else {
+            presenceController.clear()
+            return
+        }
         presenceController.update(
             for: lastDiscordNowPlaying,
             sourceArtwork: nowPlayingArtwork,
-            configuration: discordPresenceConfiguration
+            configuration: discordPresenceConfiguration,
+            weeklyArtistCount: weeklyArtistCount(for: lastDiscordNowPlaying),
+            weeklyArtist: latestSourceSnapshot?.artist,
+            language: appLanguage
         )
+    }
+
+    private func weeklyArtistCount(
+        for displayedTrack: NowPlaying,
+        recordPlayback: Bool = true
+    ) -> Int? {
+        guard discordPresenceConfiguration.showsWeeklyArtistCount,
+              let source = latestSourceSnapshot,
+              !isDiscordTrackPrivate(source),
+              !isDiscordTrackPrivate(displayedTrack),
+              latestYouTubeMusicSnapshot.map(isDiscordTrackPrivate) != true,
+              !shouldDeferDiscordActivityForPrivacy
+        else { return nil }
+
+        let count = recordPlayback && source.isPlaying && source.rate > 0
+            ? weeklyListeningStore.record(track: source)
+            : weeklyListeningStore.count(for: source)
+        return count > 0 ? count : nil
     }
 
     private func scheduleManualPresenceExpiry(for session: ManualDiscordPresenceSession) {
@@ -1199,13 +1294,37 @@ final class PlayerModel: ObservableObject {
     }
 
     private func isDiscordTrackPrivate(_ track: NowPlaying) -> Bool {
-        preferences.isDiscordTrackPrivate(
-            identifier: discordPrivacyIdentifier(for: track)
-        )
+        discordPrivacyIdentifiers(for: track).contains {
+            preferences.isDiscordTrackPrivate(identifier: $0)
+        }
     }
 
-    private func discordPrivacyIdentifier(for track: NowPlaying) -> String {
-        track.trackURL?.absoluteString ?? track.trackKey
+    private var shouldDeferDiscordActivityForPrivacy: Bool {
+        preferences.hasUnboundDiscordPrivateTracks
+            && latestYouTubeMusicSnapshot?.trackURL == nil
+            && latestSourceSnapshot?.trackURL == nil
+            && lastDiscordNowPlaying?.trackURL == nil
+    }
+
+    private func reconcileCurrentDiscordPrivacy(
+        source: NowPlaying,
+        displayedTrack: NowPlaying
+    ) {
+        let aliases = discordPrivacyIdentifiers(for: source)
+            + discordPrivacyIdentifiers(for: displayedTrack)
+            + (latestYouTubeMusicSnapshot.map(discordPrivacyIdentifiers) ?? [])
+        guard aliases.contains(where: { preferences.isDiscordTrackPrivate(identifier: $0) })
+        else { return }
+        preferences.setDiscordTrackPrivate(
+            true,
+            sourceIdentifier: source.trackKey,
+            aliases: aliases
+        )
+        weeklyListeningStore.remove(track: source)
+    }
+
+    private func discordPrivacyIdentifiers(for track: NowPlaying) -> [String] {
+        [track.trackKey, track.trackURL?.absoluteString].compactMap { $0 }
     }
 
     /// Persist a just-finished track's correction for that track only.

@@ -89,3 +89,23 @@ struct BoundedSet<Element: Hashable> {
         cache.removeValue(forKey: element)
     }
 }
+
+/// A failed lookup can be retried on a later playback poll. A monotonic time
+/// avoids burst retries or delayed recovery when the system clock changes.
+struct ArtworkRetrySchedule {
+    let delay: TimeInterval
+    private var retryAfter = LRUCache<String, TimeInterval>(capacity: SessionCacheLimits.negativeResults)
+
+    init(delay: TimeInterval) {
+        self.delay = delay
+    }
+
+    mutating func allows(_ key: String, now: TimeInterval = ProcessInfo.processInfo.systemUptime) -> Bool {
+        guard let deadline = retryAfter[key] else { return true }
+        return now >= deadline
+    }
+
+    mutating func recordMiss(_ key: String, now: TimeInterval = ProcessInfo.processInfo.systemUptime) {
+        retryAfter[key] = now + delay
+    }
+}

@@ -93,7 +93,16 @@ struct VerifiedArtworkResolver: ArtworkResolving {
                 let candidateData = loader.data(from: candidateURL, cancellation: cancellation),
                 ArtworkImageMatcher.isSameArtwork(sourceFingerprint, candidateData)
             else { continue }
-            return Artwork.upgradedURL(candidateURL).absoluteString
+
+            let upgradedURL = Artwork.upgradedURL(candidateURL)
+            guard upgradedURL != candidateURL else { return candidateURL.absoluteString }
+            let upgradedData = loader.data(from: upgradedURL, cancellation: cancellation)
+            guard !cancellation.isCancelled else { return nil }
+            if let upgradedData,
+               ArtworkImageMatcher.isSameArtwork(sourceFingerprint, upgradedData) {
+                return upgradedURL.absoluteString
+            }
+            return candidateURL.absoluteString
         }
         return nil
     }
@@ -156,8 +165,10 @@ enum Artwork {
         return nil
     }
 
-    /// Returns a small, ordered set of plausible public covers. Pixel verification is
-    /// deliberately performed by `VerifiedArtworkResolver`, not by this text search.
+    /// Returns a small, ordered set of plausible public covers. A localized catalog
+    /// title or artist can differ from MediaRemote's spelling, so results matching
+    /// either field follow exact text matches. Every URL still requires pixel
+    /// verification by `VerifiedArtworkResolver` before Discord receives it.
     static func iTunesCandidateURLs(for track: NowPlaying) -> [URL] {
         iTunesCandidateURLs(for: track, cancellation: CancellationToken())
     }
@@ -196,14 +207,16 @@ enum Artwork {
                     let rawURL = result["artworkUrl100"] as? String,
                     let url = URL(string: rawURL),
                     let resultTitle = result["trackName"] as? String,
-                    let resultArtist = result["artistName"] as? String,
-                    matchesResult(
-                        artist: track.artist,
-                        title: track.title,
-                        resultArtist: resultArtist,
-                        resultTitle: resultTitle
-                    )
+                    let resultArtist = result["artistName"] as? String
                 else { continue }
+
+                let textMatches = candidateMatchCount(
+                    artist: track.artist,
+                    title: track.title,
+                    resultArtist: resultArtist,
+                    resultTitle: resultTitle
+                )
+                guard textMatches > 0 else { continue }
 
                 let resultAlbum = (result["collectionName"] as? String) ?? ""
                 let millis = (result["trackTimeMillis"] as? NSNumber)?.doubleValue ?? 0
@@ -213,6 +226,7 @@ enum Artwork {
                 scored.append((
                     url,
                     CandidateScore(
+                        textMatches: textMatches,
                         albumMatches: !track.album.isEmpty && fieldMatches(track.album, resultAlbum),
                         durationDelta: durationDelta,
                         resultIndex: index
@@ -222,6 +236,9 @@ enum Artwork {
         }
 
         let sorted = scored.sorted { left, right in
+            if left.score.textMatches != right.score.textMatches {
+                return left.score.textMatches > right.score.textMatches
+            }
             if left.score.albumMatches != right.score.albumMatches {
                 return left.score.albumMatches
             }
@@ -232,11 +249,14 @@ enum Artwork {
         }
 
         var seen = Set<String>()
-        return sorted.compactMap { item in
+        let uniqueURLs = sorted.compactMap { item -> (URL, Int)? in
             let key = upgradedURL(item.url).absoluteString
             guard seen.insert(key).inserted else { return nil }
-            return item.url
-        }.prefix(12).map { $0 }
+            return (item.url, item.score.textMatches)
+        }
+        let exact = uniqueURLs.filter { $0.1 == 2 }.prefix(12).map(\.0)
+        let localized = uniqueURLs.filter { $0.1 == 1 }.prefix(12).map(\.0)
+        return exact + localized
     }
 
     static func upgradedURL(_ url: URL) -> URL {
@@ -276,6 +296,16 @@ enum Artwork {
         ) && fieldMatches(title, resultTitle)
     }
 
+    static func candidateMatchCount(artist: String, title: String,
+                                    resultArtist: String, resultTitle: String) -> Int {
+        let artistMatches = fieldMatches(
+            LRCLIB.primaryArtist(artist),
+            LRCLIB.primaryArtist(resultArtist)
+        )
+        let titleMatches = fieldMatches(title, resultTitle)
+        return (artistMatches ? 1 : 0) + (titleMatches ? 1 : 0)
+    }
+
     /// Conservative field match. A single shared word is not enough: that was able
     /// to attach artwork from an unrelated search result.
     static func fieldMatches(_ a: String, _ b: String) -> Bool {
@@ -306,6 +336,7 @@ enum Artwork {
     }
 
     private struct CandidateScore {
+        let textMatches: Int
         let albumMatches: Bool
         let durationDelta: Double
         let resultIndex: Int

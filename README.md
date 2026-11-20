@@ -139,10 +139,28 @@ and [Chrome web app instructions](https://support.google.com/chrome/answer/96583
 
 When the installed app already has an Application ID, enable Discord sharing in
 Companion and turn on activity sharing in Discord. In **Settings → Discord → Live**,
-choose **Member list status** to show the card's title, artist/status, or application
-name, then apply the settings. The preview follows your template and preset.
+the default **Member list status** is **Song title - artist**. The expanded card
+shows the title on the first line and the artist on the second. You can also select
+the card’s details line, its status line, or the app name, then choose **Apply**.
+The preview follows your template and preset.
 Discord controls where the activity appears and who can see it. A friend can open
-the track in YouTube Music when the card includes its verified song link.
+the same track in YouTube Music by clicking the title, the artist or weekly count,
+the cover, or **Listen on YouTube Music** when a verified song link is available.
+If the player is on the YouTube Music home page, choose **Open player page** in
+the playback bar. Companion reads the current song’s watch link there with macOS
+Accessibility access and shares only its video ID, leaving out playlist and tracking parameters.
+When Companion starts with the player already in the background, bring the player
+window forward once. Subsequent track changes can then be read in the background.
+
+Turn on **Show this artist's weekly song count on Discord** and choose **Apply**
+to show a second line such as **Companion QA · 2 songs this week**. The count is
+for the artist you are listening to, starting on Monday in your Mac's time zone.
+The weekly line uses the artist and title supplied by the player to macOS to
+keep the same recordings together when screen labels or translations change.
+Only distinct songs played while the option is on count. Replaying a song counts
+once. Set **Member list status** to **Artist / status line** to use this line in
+your status as well. Discord decides which activities appear in a server's
+recent activity cards.
 
 The floating mini player is available on macOS independently of Discord. Discord
 documents the in-game overlay for Windows and synchronized Listen Along for its
@@ -180,6 +198,10 @@ disabled. An Application ID is public; never put a bot token or client secret in
 - When enabled, Discord sharing sends the configured song fields, progress, links,
   and public artwork URL to the local Discord desktop client. Discord controls who
   can see the resulting activity. Manual presence publishes the content you enter.
+- Weekly counts are off by default. Opting in stores this week's artist and track
+  identifiers as salted hashes on this Mac. Hidden songs and manual activities
+  are excluded. With Discord sharing off, counts stay local. Turning off the
+  weekly option and applying the change clears its data.
 - Preferences, song choices, imported lyrics, and lyric/translation caches stay on
   this Mac. Diagnostics can clear downloaded lyrics; imported files are retained.
   Translation uses Apple's on-device framework, which may download language packs.
@@ -220,6 +242,7 @@ Useful probes:
 DISCORD_CLIENT_ID=your_application_id .build/debug/YTMusicCompanion --check-discord-connection
 # Publishes “Companion Test” on the signed-in Discord profile for 12 seconds, then clears it.
 DISCORD_CLIENT_ID=your_application_id .build/debug/YTMusicCompanion --discord
+# To include a weekly count of two synthetic tracks, add --weekly-summary.
 .build/debug/YTMusicCompanion --check-resources
 ```
 

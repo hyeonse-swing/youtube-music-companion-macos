@@ -9,6 +9,8 @@ struct DiscordPresenceContent: Equatable {
 /// User-editable Discord text templates. Tokens deliberately mirror the three
 /// metadata fields the app can verify, keeping customization predictable.
 struct DiscordPresenceConfiguration: Equatable {
+    static let artistAndTitle = "{artist} - {title}"
+
     static let standard = DiscordPresenceConfiguration(
         detailsTemplate: "{title}",
         stateTemplate: "{artist}",
@@ -18,7 +20,7 @@ struct DiscordPresenceConfiguration: Equatable {
         preset: .originalFirst,
         pausePolicy: .hideImmediately,
         linksDetailsToSong: true,
-        linksStateToSong: false,
+        linksStateToSong: true,
         linksCoverToSong: true,
         primaryButtonLabel: "Listen on YouTube Music",
         secondaryButtonLabel: "",
@@ -32,7 +34,8 @@ struct DiscordPresenceConfiguration: Equatable {
     var imageTextTemplate: String
     var showsPlaybackTime: Bool
     var showsSongLink: Bool = true
-    var statusDisplayType: DiscordStatusDisplayType = .details
+    var showsWeeklyArtistCount = false
+    var statusDisplayType: DiscordStatusDisplayType = .titleAndArtist
     var preset: DiscordPresencePreset = .originalFirst
     var pausePolicy: DiscordPausePolicy = .hideImmediately
     var linksDetailsToSong = true
@@ -42,10 +45,28 @@ struct DiscordPresenceConfiguration: Equatable {
     var secondaryButtonLabel = ""
     var secondaryButtonURL = ""
 
-    func content(for track: NowPlaying) -> DiscordPresenceContent {
-        DiscordPresenceContent(
+    func content(
+        for track: NowPlaying,
+        weeklyArtistCount: Int? = nil,
+        weeklyArtist: String? = nil,
+        language: AppLanguage = .system
+    ) -> DiscordPresenceContent {
+        let state: String
+        let countedArtist = weeklyArtist ?? track.artist
+        if showsWeeklyArtistCount, let count = weeklyArtistCount, count > 0, !countedArtist.isEmpty {
+            let summary = AppLocalization.format(
+                count == 1 ? "%d song this week" : "%d songs this week",
+                language: language,
+                arguments: count
+            )
+            state = PresenceActivity.textField(countedArtist, suffix: " · " + summary)
+        } else {
+            state = render(stateTemplate, track: track, fallback: track.artist)
+        }
+
+        return DiscordPresenceContent(
             details: render(detailsTemplate, track: track, fallback: track.title),
-            state: render(stateTemplate, track: track, fallback: track.artist),
+            state: state,
             imageText: render(
                 imageTextTemplate,
                 track: track,
@@ -61,6 +82,7 @@ struct DiscordPresenceConfiguration: Equatable {
             imageTextTemplate,
             showsPlaybackTime ? "time" : "no-time",
             showsSongLink ? "link" : "no-link",
+            showsWeeklyArtistCount ? "weekly-count" : "no-weekly-count",
             String(statusDisplayType.rawValue),
             preset.rawValue,
             pausePolicy.rawValue,
@@ -95,7 +117,18 @@ struct DiscordPresenceConfiguration: Equatable {
         )
     }
 
+    func activityName(for track: NowPlaying) -> String {
+        guard statusDisplayType == .titleAndArtist else {
+            return YouTubeMusicSource.displayName
+        }
+        let artist = track.artist.trimmingCharacters(in: .whitespacesAndNewlines)
+        return artist.isEmpty ? track.title : "\(track.title) - \(artist)"
+    }
+
     private func render(_ template: String, track: NowPlaying, fallback: String) -> String {
+        if template == Self.artistAndTitle {
+            return [track.artist, track.title].filter { !$0.isEmpty }.joined(separator: " - ")
+        }
         let replacements = [
             "{title}": track.title,
             "{artist}": track.artist,

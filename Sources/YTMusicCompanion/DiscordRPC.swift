@@ -23,6 +23,18 @@ struct PresenceActivity: Equatable {
     var smallImageURL: URL? = nil
     var buttons: [PresenceButton] = []
     var statusDisplayType: DiscordStatusDisplayType = .name
+
+    /// Fit a display line to the wire limit without cutting a character or its suffix.
+    static func textField(_ text: String, suffix: String = "") -> String {
+        let budget = 128 - suffix.utf8.count
+        if text.utf8.count <= budget { return text + suffix }
+        var used = 0
+        let prefix = text.prefix { character in
+            used += character.utf8.count
+            return used <= budget
+        }
+        return prefix + suffix
+    }
 }
 
 protocol PresencePublishing: AnyObject {
@@ -403,21 +415,7 @@ final class DiscordRPC: PresencePublishing {
     /// would emit invalid UTF-8). Then pad a too-short value (< 2 bytes) with a trailing
     /// space so it satisfies the 2-byte minimum.
     private static func clamp(_ s: String) -> String {
-        var capped: String
-        if s.utf8.count <= 128 {
-            capped = s
-        } else {
-            var byteCount = 0
-            var end = s.startIndex
-            while end < s.endIndex {
-                let next = s.index(after: end)
-                let characterByteCount = s[end..<next].utf8.count
-                guard byteCount + characterByteCount <= 128 else { break }
-                byteCount += characterByteCount
-                end = next
-            }
-            capped = String(s[..<end])
-        }
+        var capped = PresenceActivity.textField(s)
         while capped.utf8.count < 2 {
             capped.append(" ")
         }
@@ -451,7 +449,7 @@ final class DiscordRPC: PresencePublishing {
         if result == .accepted { return true }
         guard result == .rejected,
               let activity,
-              activity.statusDisplayType != .name,
+              activity.statusDisplayType.wireValue != nil,
               !statusDisplayTypeRejected,
               !requiresAcknowledgement else { return false }
 
@@ -466,7 +464,7 @@ final class DiscordRPC: PresencePublishing {
     private static func legacyStatusActivity(_ activity: PresenceActivity) -> PresenceActivity {
         var fallback = activity
         switch activity.statusDisplayType {
-        case .name: break
+        case .name, .titleAndArtist: break
         case .details: fallback.name = activity.details
         case .state: fallback.name = activity.state
         }
@@ -520,7 +518,7 @@ final class DiscordRPC: PresencePublishing {
         return ActivityPayload(
             type: Self.listeningType,
             name: Self.clamp(activity.name),
-            statusDisplayType: activity.statusDisplayType == .name ? nil : activity.statusDisplayType.rawValue,
+            statusDisplayType: activity.statusDisplayType.wireValue,
             details: Self.clamp(activity.details),
             state: Self.clamp(activity.state),
             detailsURL: validatedHTTPSURLString(activity.detailsURL),

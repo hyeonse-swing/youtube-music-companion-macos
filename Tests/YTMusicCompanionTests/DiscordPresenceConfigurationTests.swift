@@ -15,7 +15,7 @@ final class DiscordPresenceConfigurationTests: XCTestCase {
         sourcePID: 1
     )
 
-    func testStandardConfigurationPreservesExistingDiscordText() {
+    func testStandardConfigurationKeepsSongAndArtistSeparateInProfile() {
         let content = DiscordPresenceConfiguration.standard.content(for: track)
 
         XCTAssertEqual(content.details, track.title)
@@ -23,6 +23,36 @@ final class DiscordPresenceConfigurationTests: XCTestCase {
         XCTAssertEqual(content.imageText, track.album)
         XCTAssertTrue(DiscordPresenceConfiguration.standard.showsPlaybackTime)
         XCTAssertTrue(DiscordPresenceConfiguration.standard.showsSongLink)
+    }
+
+    func testWeeklyArtistStateRequiresOptInAndANonzeroCount() {
+        var configuration = DiscordPresenceConfiguration.standard
+        configuration.stateTemplate = "{album}"
+        XCTAssertEqual(configuration.content(for: track, weeklyArtistCount: 12).state, track.album)
+        configuration.showsWeeklyArtistCount = true
+        XCTAssertEqual(configuration.content(for: track).state, track.album)
+        XCTAssertEqual(configuration.content(for: track, weeklyArtistCount: 0).state, track.album)
+        XCTAssertEqual(configuration.content(for: track, weeklyArtistCount: 1, language: .english).state,
+                       "アーティスト · 1 song this week")
+        XCTAssertEqual(configuration.content(for: track, weeklyArtistCount: 12, language: .english).state,
+                       "アーティスト · 12 songs this week")
+        let content = configuration.content(for: track, weeklyArtistCount: 12, language: .korean)
+        XCTAssertEqual(content.state, "アーティスト · 이번 주 12곡")
+        XCTAssertEqual(content.details, track.title)
+        let alternative = configuration.content(for: track, weeklyArtistCount: 2,
+                                                weeklyArtist: "Original Credit", language: .english)
+        XCTAssertEqual(alternative.state, "Original Credit · 2 songs this week")
+    }
+
+    func testLongArtistKeepsWeeklyCountWithinDiscordLimit() {
+        var configuration = DiscordPresenceConfiguration.standard
+        configuration.showsWeeklyArtistCount = true
+        var longTrack = track
+        longTrack.artist = String(repeating: "가수🎶", count: 32)
+        let state = configuration.content(for: longTrack, weeklyArtistCount: 2, language: .korean).state
+        XCTAssertLessThanOrEqual(state.utf8.count, 128)
+        XCTAssertTrue(state.hasPrefix("가수🎶"))
+        XCTAssertTrue(state.hasSuffix(" · 이번 주 2곡"))
     }
 
     func testTemplatesReplaceEverySupportedTrackToken() {
@@ -58,13 +88,21 @@ final class DiscordPresenceConfigurationTests: XCTestCase {
         XCTAssertEqual(content.imageText, track.album)
     }
 
-    func testMemberListStatusDefaultsToTheSongTitle() {
+    func testMemberListStatusDefaultsToTitleAndArtistAndHandlesMissingArtist() {
         let configuration = DiscordPresenceConfiguration.standard
-        XCTAssertEqual(configuration.statusDisplayType, .details)
+        XCTAssertEqual(configuration.statusDisplayType, .titleAndArtist)
         XCTAssertTrue(configuration.linksDetailsToSong)
+        XCTAssertEqual(configuration.activityName(for: track), "原題 - English Title - アーティスト")
+        var instrumental = track
+        instrumental.artist = ""
+        XCTAssertEqual(configuration.content(for: instrumental).details, track.title)
+        XCTAssertEqual(configuration.activityName(for: instrumental), track.title)
+        XCTAssertEqual(DiscordPresencePreset.originalFirst.applying(to: configuration).detailsTemplate,
+                       configuration.detailsTemplate)
         var byArtist = configuration
         byArtist.statusDisplayType = .state
         XCTAssertNotEqual(configuration.publicationKey, byArtist.publicationKey)
+        XCTAssertEqual(byArtist.activityName(for: track), YouTubeMusicSource.displayName)
     }
 
     func testLivePresetsApplyDistinctContentAndVisibilityRules() {
@@ -117,6 +155,32 @@ final class DiscordPresenceConfigurationTests: XCTestCase {
         )
     }
 
+    func testWeeklyArtistLineLinksToCurrentSongWhenSharingAllowsIt() {
+        var linkedTrack = track
+        linkedTrack.trackURL = URL(string: "https://music.youtube.com/watch?v=current-song")
+        var configuration = DiscordPresenceConfiguration.standard
+        configuration.showsWeeklyArtistCount = true
+
+        XCTAssertEqual(
+            configuration.content(for: linkedTrack, weeklyArtistCount: 2, language: .english).state,
+            "アーティスト · 2 songs this week"
+        )
+        let links = configuration.links(for: linkedTrack)
+        XCTAssertEqual(links.detailsURL, linkedTrack.trackURL)
+        XCTAssertEqual(links.stateURL, linkedTrack.trackURL)
+        XCTAssertEqual(links.coverURL, linkedTrack.trackURL)
+        XCTAssertEqual(links.buttons.first?.url, linkedTrack.trackURL)
+
+        configuration.linksStateToSong = false
+        XCTAssertNil(configuration.links(for: linkedTrack).stateURL)
+        configuration.linksStateToSong = true
+        configuration.showsSongLink = false
+        XCTAssertNil(configuration.links(for: linkedTrack).stateURL)
+        configuration.showsSongLink = true
+        linkedTrack.trackURL = nil
+        XCTAssertNil(configuration.links(for: linkedTrack).stateURL)
+    }
+
     func testManualPresenceCreatesExplicitTimedActivityAndRejectsUnsafeURLs() throws {
         let startedAt = Date(timeIntervalSince1970: 1_000)
         let manual = ManualDiscordPresence(
@@ -144,6 +208,7 @@ final class DiscordPresenceConfigurationTests: XCTestCase {
             startedAt.addingTimeInterval(4 * 60)
         )
         XCTAssertEqual(activity.detailsURL?.absoluteString, manual.songURL)
+        XCTAssertNil(activity.stateURL)
         XCTAssertEqual(activity.largeImageURL?.absoluteString, manual.songURL)
         XCTAssertEqual(activity.buttons.count, 2)
 

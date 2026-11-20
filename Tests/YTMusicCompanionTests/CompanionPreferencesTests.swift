@@ -31,6 +31,7 @@ final class CompanionPreferencesTests: XCTestCase {
         XCTAssertEqual(preferences.displayMetadataSource, .youtubeMusic)
         XCTAssertEqual(preferences.discordMetadataSource, .youtubeMusic)
         XCTAssertEqual(preferences.discordPresenceConfiguration, .standard)
+        XCTAssertFalse(preferences.discordPresenceConfiguration.showsWeeklyArtistCount)
         XCTAssertEqual(preferences.overlayPreset, .balanced)
         XCTAssertFalse(preferences.karaokeModeEnabled)
     }
@@ -82,6 +83,7 @@ final class CompanionPreferencesTests: XCTestCase {
             showsSongLink: false
         )
         customized.statusDisplayType = .state
+        customized.showsWeeklyArtistCount = true
         customized.preset = .custom
         customized.pausePolicy = .keepForFifteenMinutes
         customized.linksDetailsToSong = true
@@ -96,6 +98,20 @@ final class CompanionPreferencesTests: XCTestCase {
         preferences = CompanionPreferences(defaults: defaults)
 
         XCTAssertEqual(preferences.discordPresenceConfiguration, customized)
+        XCTAssertTrue(preferences.discordPresenceConfiguration.showsWeeklyArtistCount)
+    }
+
+    func testOriginalPresetRestoresTitleDetailsAndExistingCompactChoiceIsPreserved() {
+        defaults.set(DiscordPresenceConfiguration.artistAndTitle, forKey: "discordDetailsTemplate")
+        defaults.set("originalFirst", forKey: "discordPreset")
+        XCTAssertEqual(CompanionPreferences(defaults: defaults).discordPresenceConfiguration.detailsTemplate,
+                       "{title}")
+        defaults.set(DiscordStatusDisplayType.details.rawValue, forKey: "discordStatusDisplayType")
+        XCTAssertEqual(CompanionPreferences(defaults: defaults).discordPresenceConfiguration.statusDisplayType,
+                       .details)
+        defaults.set("custom", forKey: "discordPreset")
+        XCTAssertEqual(CompanionPreferences(defaults: defaults).discordPresenceConfiguration.detailsTemplate,
+                       DiscordPresenceConfiguration.artistAndTitle)
     }
 
     func testDiscordPrivateTrackIdentifiersAreHashedAndPersisted() {
@@ -118,20 +134,72 @@ final class CompanionPreferencesTests: XCTestCase {
         XCTAssertEqual(preferences.privateDiscordTrackCount, 0)
     }
 
+    func testPrivateSongKeepsOneSourceFingerprintAcrossKnownAliases() {
+        var preferences = CompanionPreferences(defaults: defaults)
+        let source = "Artist|Title|Album"
+        let exactURL = "https://music.youtube.com/watch?v=private-song"
+        let exactLabel = "アーティスト|タイトル|Album"
+
+        // Existing installations can already have a URL-only private entry.
+        preferences.setDiscordTrackPrivate(true, identifier: exactURL)
+        XCTAssertTrue(preferences.hasUnboundDiscordPrivateTracks)
+        preferences.setDiscordTrackPrivate(true, sourceIdentifier: source,
+                                           aliases: [exactURL, exactLabel])
+        XCTAssertEqual(preferences.privateDiscordTrackCount, 1)
+        XCTAssertFalse(preferences.hasUnboundDiscordPrivateTracks)
+        XCTAssertTrue(preferences.isDiscordTrackPrivate(identifier: source))
+
+        preferences = CompanionPreferences(defaults: defaults)
+        XCTAssertEqual(preferences.privateDiscordTrackCount, 1)
+        XCTAssertTrue(preferences.isDiscordTrackPrivate(identifier: source))
+        XCTAssertTrue(preferences.isDiscordTrackPrivate(identifier: exactURL))
+        XCTAssertTrue(preferences.isDiscordTrackPrivate(identifier: exactLabel))
+        XCTAssertFalse(preferences.hasUnboundDiscordPrivateTracks)
+        XCTAssertFalse(defaults.stringArray(forKey: "discordPrivateTrackFingerprints")!
+            .contains(source))
+
+        // A later metadata poll may know the source label but temporarily lose
+        // screen access. The previously verified URL must remain an alias.
+        preferences.setDiscordTrackPrivate(true, sourceIdentifier: source,
+                                           aliases: [exactLabel])
+        XCTAssertTrue(preferences.isDiscordTrackPrivate(identifier: exactURL))
+        XCTAssertEqual(preferences.privateDiscordTrackCount, 1)
+
+        let revisedSource = "Artist|Title|Revised Album"
+        preferences.setDiscordTrackPrivate(true, sourceIdentifier: revisedSource,
+                                           aliases: [exactURL])
+        XCTAssertTrue(preferences.isDiscordTrackPrivate(identifier: source))
+        XCTAssertTrue(preferences.isDiscordTrackPrivate(identifier: revisedSource))
+        XCTAssertTrue(preferences.isDiscordTrackPrivate(identifier: exactURL))
+        XCTAssertEqual(preferences.privateDiscordTrackCount, 1)
+        let savedAliases = defaults.dictionary(forKey: "discordPrivateTrackAliases")
+            as! [String: String]
+        XCTAssertFalse(savedAliases.keys.contains(exactURL))
+        XCTAssertFalse(savedAliases.values.contains(revisedSource))
+
+        preferences.setDiscordTrackPrivate(false, sourceIdentifier: revisedSource,
+                                           aliases: [exactURL, exactLabel])
+        XCTAssertEqual(preferences.privateDiscordTrackCount, 0)
+        XCTAssertFalse(preferences.isDiscordTrackPrivate(identifier: exactURL))
+    }
+
     func testResetDiscordPresenceCustomizationReturnsToOriginalDefaults() {
         var preferences = CompanionPreferences(defaults: defaults)
-        preferences.discordPresenceConfiguration = DiscordPresenceConfiguration(
+        var customized = DiscordPresenceConfiguration(
             detailsTemplate: "Custom {title}",
             stateTemplate: "Custom {artist}",
             imageTextTemplate: "Custom {album}",
             showsPlaybackTime: false,
             showsSongLink: false
         )
+        customized.showsWeeklyArtistCount = true
+        preferences.discordPresenceConfiguration = customized
 
         preferences.resetDiscordPresenceConfiguration()
         preferences = CompanionPreferences(defaults: defaults)
 
         XCTAssertEqual(preferences.discordPresenceConfiguration, .standard)
+        XCTAssertNil(defaults.object(forKey: "discordShowsWeeklyArtistCount"))
     }
 
     func testLyricsFontSizeIsClampedAndPersisted() {

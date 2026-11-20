@@ -184,6 +184,30 @@ final class DiscordRPCTests: XCTestCase {
         XCTAssertEqual(timestamps["end"] as? Int, 1_180)
     }
 
+    func testSongAndArtistMemberStatusUsesTheNameFieldWithoutUnsupportedWireValue() throws {
+        let activity = PresenceActivity(
+            name: "Test Song - Test Artist",
+            details: "Test Song",
+            state: "Test Artist",
+            start: nil,
+            end: nil,
+            largeImage: nil,
+            largeImageText: nil,
+            smallImage: nil,
+            smallImageText: nil,
+            statusDisplayType: .titleAndArtist
+        )
+        let data = try XCTUnwrap(DiscordRPC.encodedSetActivityCommand(activity))
+        let object = try XCTUnwrap(JSONSerialization.jsonObject(with: data) as? [String: Any])
+        let args = try XCTUnwrap(object["args"] as? [String: Any])
+        let payload = try XCTUnwrap(args["activity"] as? [String: Any])
+
+        XCTAssertNil(payload["status_display_type"])
+        XCTAssertEqual(payload["name"] as? String, "Test Song - Test Artist")
+        XCTAssertEqual(payload["details"] as? String, "Test Song")
+        XCTAssertEqual(payload["state"] as? String, "Test Artist")
+    }
+
     func testActivityEncodingRejectsNonHTTPSButtons() throws {
         let activity = PresenceActivity(
             name: "YouTube Music",

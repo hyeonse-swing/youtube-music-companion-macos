@@ -76,12 +76,13 @@ enum DiscordPresencePreset: String, CaseIterable, Identifiable {
     }
 }
 
-/// Discord's status_display_type selects the line shown in member lists.
-/// Activity details and state continue to appear in the expanded profile.
+/// Selects the member-list line while details and state remain in the expanded profile.
+/// The local title-and-artist option uses Discord's standard name field.
 enum DiscordStatusDisplayType: Int, CaseIterable, Identifiable {
     case name = 0
     case state = 1
     case details = 2
+    case titleAndArtist = 3
 
     var id: Int { rawValue }
 
@@ -90,6 +91,16 @@ enum DiscordStatusDisplayType: Int, CaseIterable, Identifiable {
         case .name: "Application name"
         case .state: "Artist / status line"
         case .details: "Details line"
+        case .titleAndArtist: "Song title - artist"
+        }
+    }
+
+    /// The title-and-artist choice uses the standard name field on Discord's wire.
+    /// Its local preference value is never sent as a status_display_type value.
+    var wireValue: Int? {
+        switch self {
+        case .name, .titleAndArtist: nil
+        case .state, .details: rawValue
         }
     }
 }

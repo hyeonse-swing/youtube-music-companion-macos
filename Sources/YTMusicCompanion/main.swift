@@ -302,6 +302,8 @@ if CommandLine.arguments.contains("--now-page") ||
     print("SOURCE   → \(source.artist) — \(source.title) [\(source.album)]")
     print("DISPLAY  → \(metadata.artist) — \(metadata.title) [\(metadata.album)]")
     print("SCREEN   → \(pageMetadata == nil ? "unavailable" : "exact player-bar labels")")
+    print("ACCESS   → \(AccessibilityPermission.isGranted ? "granted" : "not granted")")
+    print("SONG URL → \(metadata.trackURL?.absoluteString ?? "unavailable")")
     exit(0)
 }
 
@@ -422,6 +424,31 @@ if checkDiscordConnection || CommandLine.arguments.contains("--discord") {
         print("Discord client ID is not configured")
         exit(2)
     }
+    let testTrack = NowPlaying(
+        title: "Companion Test", artist: "Companion QA", album: "",
+        duration: 180, elapsed: 0, timestamp: 0, isPlaying: true, rate: 1,
+        sourceBundle: "", sourcePID: 0
+    )
+    let configuration = DiscordPresenceConfiguration.standard
+    let synthetic: DiscordPresenceContent
+    if !checkDiscordConnection && CommandLine.arguments.contains("--weekly-summary") {
+        synthetic = MainActor.assumeIsolated {
+            let suite = "YTMusicCompanion.probe." + UUID().uuidString
+            let defaults = UserDefaults(suiteName: suite)!
+            defer { defaults.removePersistentDomain(forName: suite) }
+            let store = WeeklyListeningStore(defaults: defaults)
+            var firstSong = testTrack
+            firstSong.title = "First test song"
+            store.record(track: firstSong)
+            let count = store.record(track: testTrack)
+            var weekly = configuration
+            weekly.showsWeeklyArtistCount = true
+            return weekly.content(for: testTrack, weeklyArtistCount: count,
+                                  language: CompanionPreferences(defaults: .standard).appLanguage)
+        }
+    } else {
+        synthetic = configuration.content(for: testTrack)
+    }
     let rpc = DiscordRPC(clientID: clientID, requiresAcknowledgement: true)
     let group = DispatchGroup()
     group.enter()
@@ -442,16 +469,16 @@ if checkDiscordConnection || CommandLine.arguments.contains("--discord") {
         }
         let now = Date()
         rpc.setActivity(.init(
-            name: YouTubeMusicSource.displayName,
-            details: "Companion Test",
-            state: "Companion QA",
+            name: configuration.activityName(for: testTrack),
+            details: synthetic.details,
+            state: synthetic.state,
             start: now,
             end: now.addingTimeInterval(180),
             largeImage: YouTubeMusicSource.discordAssetKey,
             largeImageText: "Connection check",
             smallImage: YouTubeMusicSource.discordAssetKey,
             smallImageText: YouTubeMusicSource.displayName,
-            statusDisplayType: .details
+            statusDisplayType: configuration.statusDisplayType
         )) { sent in
             activityAccepted = sent
             print("activity acknowledged: \(sent)")

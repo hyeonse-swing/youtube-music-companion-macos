@@ -82,4 +82,22 @@ final class ArtworkTests: XCTestCase {
             resultArtist: "Archive Project", resultTitle: "Madder Than Ever"))
     }
 
+    func testLocalizedCatalogTitleOrArtistRemainsAnArtworkCandidate() {
+        XCTAssertEqual(Artwork.candidateMatchCount(
+            artist: "back number", title: "Hero Suit",
+            resultArtist: "back number", resultTitle: "ヒーロースーツ"), 1)
+        XCTAssertEqual(Artwork.candidateMatchCount(
+            artist: "CreepHyp", title: "憂、燦々",
+            resultArtist: "クリープハイプ", resultTitle: "憂、燦々"), 1)
+        XCTAssertEqual(Artwork.candidateMatchCount(
+            artist: "back number", title: "Hero Suit",
+            resultArtist: "back number", resultTitle: "Hero Suit"), 2)
+    }
+
+    func testCandidateStillRejectsUnrelatedCatalogResult() {
+        XCTAssertEqual(Artwork.candidateMatchCount(
+            artist: "back number", title: "Hero Suit",
+            resultArtist: "Unrelated Artist", resultTitle: "Different Song"), 0)
+    }
+
 }

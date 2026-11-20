@@ -55,6 +55,17 @@ final class YouTubeMusicPageMetadataTests: XCTestCase {
         XCTAssertNil(metadata)
     }
 
+    func testDoesNotLinkAStudioRecordingToAStaleLiveVersionOfTheTitle() {
+        let metadata = YouTubeMusicPageMetadataResolver.metadata(
+            documentTitle: "Band (Live) | YouTube Music",
+            playerLinks: ["back number", "Band Tour"],
+            pageURL: URL(string: "https://music.youtube.com/watch?v=old-live-id"),
+            source: track(title: "Band", artist: "back number", album: "Band")
+        )
+
+        XCTAssertNil(metadata)
+    }
+
     func testFallsBackToMediaRemoteFieldsMissingFromThePlayerBar() {
         let metadata = YouTubeMusicPageMetadataResolver.metadata(
             documentTitle: "鋼の羽根 - Iron Feather | YouTube Music",

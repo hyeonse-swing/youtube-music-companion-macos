@@ -22,6 +22,9 @@
 
 "Set Up YouTube Music…" = "Set Up YouTube Music…";
 "Show Mini Player…" = "Show Mini Player…";
+"Open the player page in YouTube Music to share the current song link." = "Open the player page in YouTube Music to share the current song link.";
+"Enable access for song links…" = "Enable access for song links…";
+"Song title - artist" = "Song title - artist";
 "Member list status" = "Member list status";
 "Application name" = "Application name";
 "Details line" = "Details line";
@@ -29,3 +32,9 @@
 "Expand Player" = "Expand Player";
 "Pin to Side" = "Pin to Side";
 "Close Now Playing" = "Close Now Playing";
+"Show this artist's weekly song count on Discord" = "Show this artist's weekly song count on Discord";
+"Counts distinct songs by the current artist heard on this Mac since Monday. Private songs are excluded. Turning this off erases the saved counts." = "Counts distinct songs by the current artist heard on this Mac since Monday. Private songs are excluded. Turning this off erases the saved counts.";
+"Play a song to begin this week's count." = "Play a song to begin this week's count.";
+"No eligible songs recorded for this artist this week." = "No eligible songs recorded for this artist this week.";
+"%d song this week" = "%d song this week";
+"%d songs this week" = "%d songs this week";

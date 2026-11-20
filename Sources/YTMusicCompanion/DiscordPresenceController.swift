@@ -31,6 +31,9 @@ final class DiscordPresenceController {
     private var lastTrack: NowPlaying?
     private var lastArtwork: NowPlayingArtwork?
     private var lastConfiguration = DiscordPresenceConfiguration.standard
+    private var lastWeeklyArtistCount: Int?
+    private var lastWeeklyArtist: String?
+    private var lastLanguage: AppLanguage = .system
     private var lastPublishedKey: String?
     private var lastPublishedStart: Double = 0
     private var pendingKey: String?
@@ -39,9 +42,7 @@ final class DiscordPresenceController {
     private var artworkCache = LRUCache<String, String>(
         capacity: SessionCacheLimits.discordArtwork
     )
-    private var artworkMisses = BoundedSet<String>(
-        capacity: SessionCacheLimits.negativeResults
-    )
+    private var artworkRetries = ArtworkRetrySchedule(delay: 90)
     private var artworkOperation: CancellableTaskOperation?
     private var pauseTimer: Timer?
 
@@ -69,13 +70,36 @@ final class DiscordPresenceController {
     func update(
         for track: NowPlaying,
         sourceArtwork: NowPlayingArtwork? = nil,
-        configuration: DiscordPresenceConfiguration = .standard
+        configuration: DiscordPresenceConfiguration = .standard,
+        weeklyArtistCount: Int? = nil,
+        weeklyArtist: String? = nil,
+        language: AppLanguage = .system
     ) {
         let previousTrackKey = lastTrack?.trackKey
+        let previousWeeklyCount = lastWeeklyArtistCount
+        let previousWeeklyArtist = lastWeeklyArtist
+        let previousWeeklyConfiguration = lastConfiguration.showsWeeklyArtistCount
+        let previousLanguage = lastLanguage.resolvedIdentifier
         lastTrack = track
         lastArtwork = sourceArtwork
         lastConfiguration = configuration
+        lastWeeklyArtistCount = weeklyArtistCount
+        lastWeeklyArtist = weeklyArtist
+        lastLanguage = language
         guard track.isPlaying, track.rate > 0 else {
+            let weeklyCardChanged = previousWeeklyConfiguration && previousWeeklyCount != nil
+                && (!configuration.showsWeeklyArtistCount
+                    || weeklyArtistCount != previousWeeklyCount
+                    || weeklyArtist != previousWeeklyArtist
+                    || language.resolvedIdentifier != previousLanguage)
+            if weeklyCardChanged {
+                clear()
+                return
+            }
+            if configuration.showsWeeklyArtistCount, weeklyArtistCount == nil {
+                clear()
+                return
+            }
             handlePausedTrack(
                 track,
                 previousTrackKey: previousTrackKey,
@@ -96,6 +120,9 @@ final class DiscordPresenceController {
             track.trackURL?.absoluteString ?? "no-link",
             artworkURL ?? "fallback",
             configuration.publicationKey,
+            configuration.showsWeeklyArtistCount ? String(weeklyArtistCount ?? 0) : "",
+            configuration.showsWeeklyArtistCount ? weeklyArtist ?? "" : "",
+            configuration.showsWeeklyArtistCount ? language.resolvedIdentifier : "",
         ].joined(separator: "|")
         let seeked = track.timestamp > 0 && abs(startEpoch - lastPublishedStart) > 3
 
@@ -106,7 +133,10 @@ final class DiscordPresenceController {
             for: track,
             startEpoch: startEpoch,
             artworkURL: artworkURL,
-            configuration: configuration
+            configuration: configuration,
+            weeklyArtistCount: weeklyArtistCount,
+            weeklyArtist: weeklyArtist,
+            language: language
         )
         publish(activity, publicationKey: publicationKey, startEpoch: startEpoch)
     }
@@ -120,6 +150,9 @@ final class DiscordPresenceController {
         lastTrack = nil
         lastArtwork = nil
         lastConfiguration = .standard
+        lastWeeklyArtistCount = nil
+        lastWeeklyArtist = nil
+        lastLanguage = .system
         let publicationKey = "manual|\(sessionKey)"
         guard pendingKey != publicationKey, lastPublishedKey != publicationKey else { return }
         publish(
@@ -138,6 +171,9 @@ final class DiscordPresenceController {
         lastTrack = nil
         lastArtwork = nil
         lastConfiguration = .standard
+        lastWeeklyArtistCount = nil
+        lastWeeklyArtist = nil
+        lastLanguage = .system
         pendingKey = nil
         lastPublishedKey = nil
         lastPublishedStart = 0
@@ -154,7 +190,10 @@ final class DiscordPresenceController {
         for track: NowPlaying,
         startEpoch: Double,
         artworkURL: String?,
-        configuration: DiscordPresenceConfiguration
+        configuration: DiscordPresenceConfiguration,
+        weeklyArtistCount: Int?,
+        weeklyArtist: String?,
+        language: AppLanguage
     ) -> PresenceActivity {
         let end = configuration.showsPlaybackTime && track.duration > 0
             ? Date(timeIntervalSince1970: startEpoch + track.duration)
@@ -163,11 +202,16 @@ final class DiscordPresenceController {
             ? Date(timeIntervalSince1970: startEpoch)
             : nil
         let image = artworkURL ?? YouTubeMusicSource.discordAssetKey
-        let content = configuration.content(for: track)
+        let content = configuration.content(
+            for: track,
+            weeklyArtistCount: weeklyArtistCount,
+            weeklyArtist: weeklyArtist,
+            language: language
+        )
         let links = configuration.links(for: track)
 
         return PresenceActivity(
-            name: YouTubeMusicSource.displayName,
+            name: configuration.activityName(for: track),
             details: content.details,
             state: content.state,
             start: start,
@@ -256,7 +300,7 @@ final class DiscordPresenceController {
             return cached
         }
         guard
-            !artworkMisses.contains(cacheKey),
+            artworkRetries.allows(cacheKey),
             artworkOperation?.key != cacheKey
         else { return nil }
 
@@ -304,7 +348,7 @@ final class DiscordPresenceController {
         if let url {
             artworkCache[cacheKey] = url
         } else {
-            artworkMisses.insert(cacheKey)
+            artworkRetries.recordMiss(cacheKey)
         }
         guard
             url != nil,
@@ -315,7 +359,10 @@ final class DiscordPresenceController {
         update(
             for: track,
             sourceArtwork: sourceArtwork,
-            configuration: lastConfiguration
+            configuration: lastConfiguration,
+            weeklyArtistCount: lastWeeklyArtistCount,
+            weeklyArtist: lastWeeklyArtist,
+            language: lastLanguage
         )
     }
 }

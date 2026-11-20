@@ -24,17 +24,22 @@ final class YouTubeMusicPageMetadataResolver: TrackMetadataResolving, @unchecked
         ) else { return nil }
         guard let snapshot = YouTubeMusicAccessibility.snapshot(
             pid: track.sourcePID,
+            sourceTitle: track.title,
             cancellation: cancellation
         ) else {
             return nil
         }
         guard !cancellation.isCancelled else { return nil }
-        return Self.metadata(
+        let metadata = Self.metadata(
             documentTitle: snapshot.documentTitle,
             playerLinks: snapshot.playerLinks,
             pageURL: snapshot.pageURL,
             source: track
         )
+        if metadata != nil {
+            YouTubeMusicAccessibility.remember(snapshot.webArea, pid: track.sourcePID)
+        }
+        return metadata
     }
 
     static func metadata(
@@ -79,11 +84,15 @@ final class YouTubeMusicPageMetadataResolver: TrackMetadataResolving, @unchecked
         return title.isEmpty ? nil : title
     }
 
-    private static func isCurrentPageTitle(_ pageTitle: String, sourceTitle: String) -> Bool {
-        let page = Artwork.normalizeSearchTerm(pageTitle)
+    fileprivate static func isCurrentPageTitle(_ pageTitle: String, sourceTitle: String) -> Bool {
         let source = Artwork.normalizeSearchTerm(sourceTitle)
-        guard !page.isEmpty, !source.isEmpty else { return false }
-        return page.contains(source) || source.contains(page)
+        guard !source.isEmpty else { return false }
+        if Artwork.normalizeSearchTerm(pageTitle) == source { return true }
+        // The page can show "original - translated" while MediaRemote sends
+        // one of those labels. A substring also matches another recording such
+        // as "Band (Live)", which must never receive the previous song's URL.
+        let labels = pageTitle.components(separatedBy: " - ")
+        return labels.contains { Artwork.normalizeSearchTerm($0) == source }
     }
 }
 
@@ -123,16 +132,21 @@ enum AccessibilityPermission {
 }
 
 private struct YouTubeMusicAccessibilitySnapshot {
+    let webArea: AXUIElement
     let documentTitle: String
     let playerLinks: [String]
     let pageURL: URL?
 }
 
 private enum YouTubeMusicAccessibility {
+    private static let cacheLock = NSLock()
+    private static var cachedWebArea: (pid: Int32, element: AXUIElement)?
     private static let linkRole = "AXLink"
     private static let webAreaRole = "AXWebArea"
     private static let childrenAttribute = kAXChildrenAttribute as String
     private static let descriptionAttribute = kAXDescriptionAttribute as String
+    private static let focusedWindowAttribute = kAXFocusedWindowAttribute as String
+    private static let mainWindowAttribute = kAXMainWindowAttribute as String
     private static let roleAttribute = kAXRoleAttribute as String
     private static let titleAttribute = kAXTitleAttribute as String
     private static let urlAttribute = kAXURLAttribute as String
@@ -140,35 +154,82 @@ private enum YouTubeMusicAccessibility {
 
     static func snapshot(
         pid: Int32,
+        sourceTitle: String,
         cancellation: CancellationToken
     ) -> YouTubeMusicAccessibilitySnapshot? {
         let application = AXUIElementCreateApplication(pid)
-        let roots = elements(application, attribute: windowsAttribute)
+        // Chromium web apps can expose their window through AXFocusedWindow or
+        // AXMainWindow while AXWindows is empty, even when the page is visible.
+        let roots = [focusedWindowAttribute, mainWindowAttribute]
+            .compactMap { element(application, attribute: $0) }
+            + elements(application, attribute: windowsAttribute)
             + elements(application, attribute: childrenAttribute)
 
         for root in roots {
             guard !cancellation.isCancelled else { return nil }
             let descendants = descendants(of: root, cancellation: cancellation)
-            guard let documentTitle = documentTitle(in: descendants) else { continue }
-            let playerLinks = playerLinkLabels(in: descendants)
-            return YouTubeMusicAccessibilitySnapshot(
-                documentTitle: documentTitle,
-                playerLinks: playerLinks,
-                pageURL: pageURL(in: descendants)
-            )
+            guard let page = snapshot(in: descendants, sourceTitle: sourceTitle) else { continue }
+            return page
+        }
+
+        // Chromium can remove every application-level window from AX when its
+        // app shim goes into the background. The already verified web area stays
+        // live and updates its title and URL as playback advances.
+        if let cached = cachedWebArea(for: pid) {
+            if let page = snapshot(in: descendants(of: cached, cancellation: cancellation),
+                                   sourceTitle: sourceTitle) {
+                return page
+            }
+            // MediaRemote often announces the next track before the page title
+            // updates. Keep the live element for the next restrained retry.
+            if role(of: cached) != webAreaRole || string(cached, attribute: titleAttribute) == nil {
+                forgetWebArea(for: pid)
+            }
         }
         return nil
     }
 
-    private static func documentTitle(in elements: [AXUIElement]) -> String? {
-        elements.first { role(of: $0) == webAreaRole }
-            .flatMap { string($0, attribute: titleAttribute) }
+    static func remember(_ webArea: AXUIElement, pid: Int32) {
+        cacheLock.withLock { cachedWebArea = (pid, webArea) }
     }
 
-    private static func pageURL(in elements: [AXUIElement]) -> URL? {
+    private static func cachedWebArea(for pid: Int32) -> AXUIElement? {
+        cacheLock.withLock {
+            guard cachedWebArea?.pid == pid else {
+                cachedWebArea = nil
+                return nil
+            }
+            return cachedWebArea?.element
+        }
+    }
+
+    private static func forgetWebArea(for pid: Int32) {
+        cacheLock.withLock {
+            if cachedWebArea?.pid == pid { cachedWebArea = nil }
+        }
+    }
+
+    private static func snapshot(
+        in elements: [AXUIElement],
+        sourceTitle: String
+    ) -> YouTubeMusicAccessibilitySnapshot? {
         guard let webArea = elements.first(where: { role(of: $0) == webAreaRole }) else {
             return nil
         }
+        guard let documentTitle = string(webArea, attribute: titleAttribute),
+              let songTitle = documentTitle.components(separatedBy: " | YouTube Music").first,
+              YouTubeMusicPageMetadataResolver.isCurrentPageTitle(songTitle, sourceTitle: sourceTitle)
+        else { return nil }
+
+        return YouTubeMusicAccessibilitySnapshot(
+            webArea: webArea,
+            documentTitle: documentTitle,
+            playerLinks: playerLinkLabels(in: elements),
+            pageURL: pageURL(of: webArea)
+        )
+    }
+
+    private static func pageURL(of webArea: AXUIElement) -> URL? {
         var value: CFTypeRef?
         guard
             AXUIElementCopyAttributeValue(
@@ -232,6 +293,14 @@ private enum YouTubeMusicAccessibility {
             let elements = value as? [AXUIElement]
         else { return [] }
         return elements
+    }
+
+    private static func element(_ application: AXUIElement, attribute: String) -> AXUIElement? {
+        var value: CFTypeRef?
+        guard AXUIElementCopyAttributeValue(application, attribute as CFString, &value) == .success,
+              let value,
+              CFGetTypeID(value) == AXUIElementGetTypeID() else { return nil }
+        return unsafeBitCast(value, to: AXUIElement.self)
     }
 
     private static func role(of element: AXUIElement) -> String? {

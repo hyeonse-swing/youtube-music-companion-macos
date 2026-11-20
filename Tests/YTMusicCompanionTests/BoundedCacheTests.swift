@@ -25,6 +25,17 @@ final class BoundedCacheTests: XCTestCase {
         XCTAssertEqual(cache["track"], 2)
     }
 
+    func testTransientArtworkMissRetriesAfterCooldownWithoutBlockingTheNextTrack() {
+        var schedule = ArtworkRetrySchedule(delay: 15)
+        XCTAssertTrue(schedule.allows("first", now: 100))
+        schedule.recordMiss("first", now: 100)
+        XCTAssertFalse(schedule.allows("first", now: 114))
+        XCTAssertTrue(schedule.allows("second", now: 114))
+        XCTAssertTrue(schedule.allows("first", now: 115))
+        schedule.recordMiss("first", now: 115)
+        XCTAssertFalse(schedule.allows("first", now: 129))
+    }
+
     func testBoundedSetEvictsItsOldestMember() {
         var set = BoundedSet<String>(capacity: 2)
         set.insert("first")

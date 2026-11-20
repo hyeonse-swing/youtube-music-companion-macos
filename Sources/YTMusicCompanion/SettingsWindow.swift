@@ -894,6 +894,20 @@ private struct DiscordSettingsView: View {
                 }
             }
 
+            Toggle(
+                "Show this artist's weekly song count on Discord",
+                isOn: $draft.showsWeeklyArtistCount
+            )
+            Text(
+                AppLocalization.string(
+                    "Counts distinct songs by the current artist heard on this Mac since Monday. "
+                        + "Private songs are excluded. Turning this off erases the saved counts.",
+                    language: model.appLanguage
+                )
+            )
+            .font(.caption)
+            .foregroundStyle(.secondary)
+
             Picker("When playback pauses", selection: $draft.pausePolicy) {
                 ForEach(DiscordPausePolicy.allCases) { policy in
                     Text(
@@ -926,6 +940,15 @@ private struct DiscordSettingsView: View {
         }
 
         Section("Links and Buttons") {
+            if draft.showsSongLink, let track = model.discordPreviewTrack, track.trackURL == nil {
+                if model.hasExactMetadataAccess {
+                    Text("Open the player page in YouTube Music to share the current song link.")
+                        .font(.caption)
+                        .foregroundStyle(.secondary)
+                } else {
+                    Button("Enable access for song links…") { model.requestExactMetadataAccess() }
+                }
+            }
             Toggle("Link the top line to the song", isOn: $draft.linksDetailsToSong)
                 .disabled(!draft.showsSongLink)
             Toggle("Link the second line to the song", isOn: $draft.linksStateToSong)
@@ -993,6 +1016,18 @@ private struct DiscordSettingsView: View {
             LabeledContent("Member list status") {
                 Text(verbatim: memberStatusPreview)
                     .lineLimit(2)
+            }
+            if draft.showsWeeklyArtistCount && model.discordPreviewWeeklyArtistCount == nil {
+                Text(
+                    AppLocalization.string(
+                        model.discordPreviewTrack == nil
+                            ? "Play a song to begin this week's count."
+                            : "No eligible songs recorded for this artist this week.",
+                        language: model.appLanguage
+                    )
+                )
+                .font(.caption)
+                .foregroundStyle(.secondary)
             }
             DiscordPresencePreview(
                 activity: livePreviewActivity,
@@ -1158,7 +1193,7 @@ private struct DiscordSettingsView: View {
     private var memberStatusPreview: String {
         let activity = livePreviewActivity
         switch draft.statusDisplayType {
-        case .name: return activity.name
+        case .name, .titleAndArtist: return activity.name
         case .details: return activity.details
         case .state: return activity.state
         }
@@ -1166,13 +1201,19 @@ private struct DiscordSettingsView: View {
 
     private var livePreviewActivity: PresenceActivity {
         let track = model.discordPreviewTrack ?? Self.exampleTrack
-        let content = draft.content(for: track)
+        let content = draft.content(
+            for: track,
+            weeklyArtistCount: model.discordPreviewTrack == nil
+                ? nil : model.discordPreviewWeeklyArtistCount,
+            weeklyArtist: model.sourceNowPlaying?.artist,
+            language: model.appLanguage
+        )
         let links = draft.links(for: track)
         let start = draft.showsPlaybackTime
             ? Date().addingTimeInterval(-track.elapsed)
             : nil
         return PresenceActivity(
-            name: YouTubeMusicSource.displayName,
+            name: draft.activityName(for: track),
             details: content.details,
             state: content.state,
             start: start,

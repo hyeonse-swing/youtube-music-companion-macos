@@ -288,6 +288,9 @@
 
 "Set Up YouTube Music…" = "YouTube Music 설치 및 실행…";
 "Show Mini Player…" = "미니 플레이어 열기…";
+"Open the player page in YouTube Music to share the current song link." = "현재 곡의 링크를 공유하려면 YouTube Music에서 플레이어 페이지를 여세요.";
+"Enable access for song links…" = "곡 링크 공유를 위한 접근 허용…";
+"Song title - artist" = "곡명 - 가수";
 "Member list status" = "멤버 목록에 표시할 내용";
 "Application name" = "앱 이름";
 "Details line" = "첫 번째 줄";
@@ -295,3 +298,9 @@
 "Expand Player" = "플레이어 펼치기";
 "Pin to Side" = "화면 가장자리에 고정";
 "Close Now Playing" = "플레이어 닫기";
+"Show this artist's weekly song count on Discord" = "현재 아티스트의 이번 주 곡 수를 Discord에 표시";
+"Counts distinct songs by the current artist heard on this Mac since Monday. Private songs are excluded. Turning this off erases the saved counts." = "이 Mac에서 월요일부터 들은 현재 아티스트의 서로 다른 곡을 셉니다. 비공개 곡은 제외하고, 이 옵션을 끄면 저장된 집계가 지워집니다.";
+"Play a song to begin this week's count." = "곡을 재생하면 이번 주 집계를 시작합니다.";
+"No eligible songs recorded for this artist this week." = "이번 주에 집계된 이 아티스트의 곡이 없습니다.";
+"%d song this week" = "이번 주 %d곡";
+"%d songs this week" = "이번 주 %d곡";

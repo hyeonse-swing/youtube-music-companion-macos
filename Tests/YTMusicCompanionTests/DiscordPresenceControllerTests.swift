@@ -79,7 +79,7 @@ final class DiscordPresenceControllerTests: XCTestCase {
         XCTAssertEqual(publisher.activities.first?.largeImage, YouTubeMusicSource.discordAssetKey)
     }
 
-    func testLiveActivityUsesYouTubeMusicIdentityAndSongTitleStatus() {
+    func testLiveActivityRestoresSongThenArtistNameWithSeparateProfileFields() {
         let publisher = StubPublisher()
         let controller = DiscordPresenceController(
             publisher: publisher,
@@ -89,8 +89,8 @@ final class DiscordPresenceControllerTests: XCTestCase {
         track.trackURL = URL(string: "https://music.youtube.com/watch?v=abc123")
         controller.update(for: track)
         let activity = publisher.activities.first
-        XCTAssertEqual(activity?.name, "YouTube Music")
-        XCTAssertEqual(activity?.statusDisplayType, .details)
+        XCTAssertEqual(activity?.name, "Test Song - Test Artist")
+        XCTAssertEqual(activity?.statusDisplayType, .titleAndArtist)
         XCTAssertEqual(activity?.details, "Test Song")
         XCTAssertEqual(activity?.state, "Test Artist")
         XCTAssertEqual(activity?.detailsURL, track.trackURL)
@@ -102,6 +102,7 @@ final class DiscordPresenceControllerTests: XCTestCase {
         controller.update(for: track, configuration: changed)
         XCTAssertEqual(publisher.activities.count, 2)
         XCTAssertEqual(publisher.activities.last?.statusDisplayType, .state)
+        XCTAssertEqual(publisher.activities.last?.name, YouTubeMusicSource.displayName)
     }
 
     func testCustomTextAndHiddenPlaybackTimeArePublished() {
@@ -145,6 +146,48 @@ final class DiscordPresenceControllerTests: XCTestCase {
 
         XCTAssertEqual(publisher.activities.count, 2)
         XCTAssertEqual(publisher.activities.last?.details, "🎵 Test Song")
+    }
+
+    func testWeeklyArtistCountChangesTheLiveCardWithoutDuplicateSends() {
+        let publisher = StubPublisher()
+        let controller = DiscordPresenceController(
+            publisher: publisher,
+            artworkResolver: StubArtworkResolver()
+        )
+        var track = makeTrack()
+        track.artist = "Screen Artist"
+        var configuration = DiscordPresenceConfiguration.standard
+        configuration.showsWeeklyArtistCount = true
+
+        controller.update(
+            for: track,
+            configuration: configuration,
+            weeklyArtistCount: 2,
+            weeklyArtist: "Test Artist",
+            language: .english
+        )
+        XCTAssertEqual(publisher.activities.last?.state, "Test Artist · 2 songs this week")
+        publisher.completeNext(with: true)
+        drainMainQueue()
+
+        controller.update(
+            for: track,
+            configuration: configuration,
+            weeklyArtistCount: 2,
+            weeklyArtist: "Test Artist",
+            language: .english
+        )
+        XCTAssertEqual(publisher.activities.count, 1)
+
+        controller.update(
+            for: track,
+            configuration: configuration,
+            weeklyArtistCount: 3,
+            weeklyArtist: "Test Artist",
+            language: .english
+        )
+        XCTAssertEqual(publisher.activities.count, 2)
+        XCTAssertEqual(publisher.activities.last?.state, "Test Artist · 3 songs this week")
     }
 
     func testPublishesTheExactYouTubeMusicSongLink() {
@@ -217,6 +260,89 @@ final class DiscordPresenceControllerTests: XCTestCase {
         )
         XCTAssertEqual(retainedPublisher.clearCount, 0)
         XCTAssertEqual(retainedPublisher.activities.count, 1)
+    }
+
+    func testPausedWeeklyCardClearsAfterTheLocalWeekChanges() {
+        let publisher = StubPublisher()
+        let controller = DiscordPresenceController(
+            publisher: publisher,
+            artworkResolver: StubArtworkResolver()
+        )
+        var configuration = DiscordPresenceConfiguration.standard
+        configuration.showsWeeklyArtistCount = true
+        configuration.pausePolicy = .keepVisible
+        var track = makeTrack()
+
+        controller.update(for: track, configuration: configuration, weeklyArtistCount: 3)
+        publisher.completeNext(with: true)
+        drainMainQueue()
+        track.isPlaying = false
+        track.rate = 0
+        controller.update(for: track, configuration: configuration, weeklyArtistCount: nil)
+
+        XCTAssertEqual(publisher.clearCount, 1)
+    }
+
+    func testTurningWeeklySummaryOffClearsRetainedPausedCard() {
+        let publisher = StubPublisher()
+        let controller = DiscordPresenceController(
+            publisher: publisher,
+            artworkResolver: StubArtworkResolver()
+        )
+        var configuration = DiscordPresenceConfiguration.standard
+        configuration.showsWeeklyArtistCount = true
+        configuration.pausePolicy = .keepVisible
+        var track = makeTrack()
+
+        controller.update(for: track, configuration: configuration, weeklyArtistCount: 3)
+        publisher.completeNext(with: true)
+        drainMainQueue()
+        track.isPlaying = false
+        track.rate = 0
+        controller.update(for: track, configuration: configuration, weeklyArtistCount: 3)
+        XCTAssertEqual(publisher.clearCount, 0)
+
+        configuration.showsWeeklyArtistCount = false
+        controller.update(for: track, configuration: configuration)
+        XCTAssertEqual(publisher.clearCount, 1)
+    }
+
+    func testChangingLanguageClearsRetainedPausedWeeklyCard() {
+        let publisher = StubPublisher()
+        let controller = DiscordPresenceController(
+            publisher: publisher,
+            artworkResolver: StubArtworkResolver()
+        )
+        var configuration = DiscordPresenceConfiguration.standard
+        configuration.showsWeeklyArtistCount = true
+        configuration.pausePolicy = .keepVisible
+        var track = makeTrack()
+
+        controller.update(
+            for: track,
+            configuration: configuration,
+            weeklyArtistCount: 3,
+            language: .english
+        )
+        publisher.completeNext(with: true)
+        drainMainQueue()
+        track.isPlaying = false
+        track.rate = 0
+        controller.update(
+            for: track,
+            configuration: configuration,
+            weeklyArtistCount: 3,
+            language: .english
+        )
+        XCTAssertEqual(publisher.clearCount, 0)
+
+        controller.update(
+            for: track,
+            configuration: configuration,
+            weeklyArtistCount: 3,
+            language: .korean
+        )
+        XCTAssertEqual(publisher.clearCount, 1)
     }
 
     func testManualActivityReplacesLiveAndDeduplicatesTheSameSession() throws {
